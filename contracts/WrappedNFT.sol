@@ -32,7 +32,7 @@ contract WrappedNFT is ERC721, Ownable, IERC4906 {
     }
 
     /**
-     * Called when an ERC721 is sent to the contract. If it's an FLS token then send back a wrapped token
+     * Called when an ERC721 is sent to the contract. If it's an a token we can wrap then send back a wrapped token
      */
     function onERC721Received(
         address from,
