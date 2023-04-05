@@ -10,12 +10,14 @@
     "@typechain/ethers-v6": "^0.3.0",
     "ethers": "^6.2.0",
     "hardhat": "^2.13.0",
+    "hardhat-gas-reporter": "^1.0.9",
     "solmate": "^6.7.0",
     "typechain": "^8.1.1"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.1",
     "chai": "^4.3.7",
+    "dotenv": "^16.0.3",
     "ts-node": "^10.9.1",
     "typescript": "^5.0.3"
   }
