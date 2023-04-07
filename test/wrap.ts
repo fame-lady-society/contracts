@@ -1,22 +1,9 @@
 import { expect } from "chai";
-import { Typed } from "ethers";
-import { ethers } from "hardhat";
+import { defaultFactory } from "./utils/factory";
 
 describe("WrapNFT", function () {
   it("Single NFT round trip", async function () {
-    const [owner] = await ethers.getSigners();
-
-    const TestNFT = await ethers.getContractFactory("TestNFT");
-    const testNft = await TestNFT.deploy();
-
-    // wrapped NFT
-    const WrappedNFT = await ethers.getContractFactory("WrappedNFT");
-    const wrappedNft = await WrappedNFT.deploy(
-      "Wrapped NFT",
-      "wNFT",
-      await testNft.getAddress(),
-      await testNft.getAddress()
-    );
+    const { owner, testNft, wrappedNft } = await defaultFactory();
 
     // now mint a token
     await testNft.mint(owner.address, 1);

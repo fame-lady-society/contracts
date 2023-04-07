@@ -2,33 +2,75 @@
 pragma solidity ^0.8.16;
 
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import {IERC2981} from "@openzeppelin/contracts/interfaces/IERC2981.sol";
+import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {ERC721} from "solmate/src/tokens/ERC721.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
+import {OperatorFilterer} from "operator-filter-registry/src/OperatorFilterer.sol";
+import {CANONICAL_CORI_SUBSCRIPTION} from "operator-filter-registry/src/lib/Constants.sol";
 import {ITokenURIGenerator} from "./ITokenURIGenerator.sol";
 import {IERC4906} from "./IERC4906.sol";
 
-contract WrappedNFT is ERC721, Ownable, IERC4906 {
+contract WrappedNFT is
+    AccessControl,
+    ERC721,
+    Ownable2Step,
+    OperatorFilterer,
+    IERC4906
+{
+    struct RoyaltyInfo {
+        address receiver;
+        uint96 royaltyFraction;
+    }
+    RoyaltyInfo public defaultRoyaltyInfo;
     IERC721 public immutable wrappedNft;
     ITokenURIGenerator public renderer;
     mapping(uint256 => bool) public claimed;
+
+    bytes32 public constant UPDATE_RENDERER_ROLE =
+        keccak256("UPDATE_RENDERER_ROLE");
+    bytes32 public constant UPDATE_ROYALTY_ROLE =
+        keccak256("UPDATE_ROYALTY_ROLE");
+
+    error MustWrapOneToken();
+    error MustOwnToken(uint256 tokenId);
+    error TokenNotWrapped(uint256 tokenId);
 
     constructor(
         string memory name,
         string memory symbol,
         address nftContract,
         address tokenRenderer
-    ) ERC721(name, symbol) {
+    ) ERC721(name, symbol) OperatorFilterer(CANONICAL_CORI_SUBSCRIPTION, true) {
         wrappedNft = IERC721(nftContract);
         renderer = ITokenURIGenerator(tokenRenderer);
+        transferOwnership(msg.sender);
+        _grantRole(AccessControl.DEFAULT_ADMIN_ROLE, msg.sender);
     }
 
     function isWrapped(uint256 tokenId) public view returns (bool) {
         return wrappedNft.ownerOf(tokenId) == address(this);
     }
 
-    function setRenderer(address newRenderer) public onlyOwner {
+    function setRenderer(
+        address newRenderer
+    ) public onlyRole(UPDATE_RENDERER_ROLE) {
         renderer = ITokenURIGenerator(newRenderer);
         emit BatchMetadataUpdate(0, 10000);
+    }
+
+    function setDefaultRoyalty(
+        address receiver,
+        uint96 feeNumerator
+    ) public onlyRole(UPDATE_ROYALTY_ROLE) {
+        defaultRoyaltyInfo = RoyaltyInfo(receiver, feeNumerator);
+    }
+
+    function wrap(uint256[] calldata tokenIds) public {
+        if (tokenIds.length == 0) revert MustWrapOneToken();
+        for (uint256 i = 0; i < tokenIds.length; i++) {
+            wrappedNft.safeTransferFrom(msg.sender, address(this), tokenIds[i]);
+        }
     }
 
     /**
@@ -41,7 +83,8 @@ contract WrappedNFT is ERC721, Ownable, IERC4906 {
         bytes calldata
     ) external returns (bytes4) {
         // Check that we now own token
-        require(wrappedNft.ownerOf(tokenId) == address(this), "must own");
+        if (wrappedNft.ownerOf(tokenId) != address(this))
+            revert MustOwnToken(tokenId);
         // Can only succeed if the token does not already exist
         _mint(from, tokenId);
         // Done
@@ -49,8 +92,8 @@ contract WrappedNFT is ERC721, Ownable, IERC4906 {
     }
 
     function unwrap(address to, uint256 tokenId) public {
-        require(ownerOf(tokenId) == msg.sender, "must own");
-        require(isWrapped(tokenId), "not wrapped");
+        if (!isWrapped(tokenId)) revert TokenNotWrapped(tokenId);
+        if (ownerOf(tokenId) != msg.sender) revert MustOwnToken(tokenId);
         _burn(tokenId);
         wrappedNft.safeTransferFrom(address(this), to, tokenId);
     }
@@ -68,15 +111,66 @@ contract WrappedNFT is ERC721, Ownable, IERC4906 {
         return renderer.tokenURI(tokenId);
     }
 
-    function withdraw() external onlyOwner {
-        payable(owner()).transfer(address(this).balance);
-    }
-
     function supportsInterface(
         bytes4 interfaceId
-    ) public view virtual override(ERC721) returns (bool) {
+    ) public view virtual override(ERC721, AccessControl) returns (bool) {
         return
+            interfaceId == type(IERC2981).interfaceId ||
             interfaceId == bytes4(0x49064906) ||
             super.supportsInterface(interfaceId);
+    }
+
+    function setApprovalForAll(
+        address operator,
+        bool approved
+    ) public override onlyAllowedOperatorApproval(operator) {
+        super.setApprovalForAll(operator, approved);
+    }
+
+    function approve(
+        address operator,
+        uint256 tokenId
+    ) public override onlyAllowedOperatorApproval(operator) {
+        super.approve(operator, tokenId);
+    }
+
+    function transferFrom(
+        address from,
+        address to,
+        uint256 tokenId
+    ) public override onlyAllowedOperator(from) {
+        super.transferFrom(from, to, tokenId);
+    }
+
+    function safeTransferFrom(
+        address from,
+        address to,
+        uint256 tokenId
+    ) public override onlyAllowedOperator(from) {
+        super.safeTransferFrom(from, to, tokenId);
+    }
+
+    function safeTransferFrom(
+        address from,
+        address to,
+        uint256 tokenId,
+        bytes calldata data
+    ) public override onlyAllowedOperator(from) {
+        super.safeTransferFrom(from, to, tokenId, data);
+    }
+
+    /**
+     * @dev Returns how much royalty is owed and to whom, based on a sale price that may be denominated in any unit of
+     * exchange. The royalty amount is denominated and should be paid in that same unit of exchange.
+     */
+    function royaltyInfo(
+        uint256,
+        uint256 _salePrice
+    ) public view returns (address, uint256 royaltyAmount) {
+        royaltyAmount =
+            (_salePrice * defaultRoyaltyInfo.royaltyFraction) /
+            10000;
+
+        return (defaultRoyaltyInfo.receiver, royaltyAmount);
     }
 }
