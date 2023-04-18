@@ -18,7 +18,7 @@ const func: DeployFunction = async function ({
   const testTokenName = envTestName(network.name);
   const testTokenSymbol = envTestSymbol(network.name);
 
-  await deploy("TestNFT", {
+  await deploy("BulkMinter", {
     from: deployer,
     log: true,
     args: [testTokenName, testTokenSymbol, baseURI],

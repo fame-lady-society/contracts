@@ -15,10 +15,12 @@
     "hardhat-gas-reporter": "^1.0.9",
     "operator-filter-registry": "^1.4.1",
     "solmate": "^6.7.0",
-    "typechain": "^8.1.1"
+    "typechain": "^8.1.1",
+    "wagmi": "^0.12.10"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.1",
+    "@wagmi/cli": "^0.1.15",
     "chai": "^4.3.7",
     "dotenv": "^16.0.3",
     "ts-node": "^10.9.1",

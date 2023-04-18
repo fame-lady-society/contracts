@@ -25,12 +25,14 @@ contract WrappedNFT is
     RoyaltyInfo public defaultRoyaltyInfo;
     IERC721 public immutable wrappedNft;
     ITokenURIGenerator public renderer;
+    uint256 public wrapCost = 0;
     mapping(uint256 => bool) public claimed;
 
     bytes32 public constant UPDATE_RENDERER_ROLE =
         keccak256("UPDATE_RENDERER_ROLE");
-    bytes32 public constant UPDATE_ROYALTY_ROLE =
-        keccak256("UPDATE_ROYALTY_ROLE");
+    bytes32 public constant TREASURER_ROLE = keccak256("TREASURER_ROLE");
+    bytes32 public constant EMIT_METADATA_ROLE =
+        keccak256("EMIT_METADATA_ROLE");
 
     error MustWrapOneToken();
     error MustOwnToken(uint256 tokenId);
@@ -48,28 +50,73 @@ contract WrappedNFT is
         _grantRole(AccessControl.DEFAULT_ADMIN_ROLE, msg.sender);
     }
 
+    /**
+     * @dev Returns true of the tokenId is wrapped (owned by this contract)
+     *
+     * @param tokenId the token to check if wrapped
+     * @return bool
+     */
     function isWrapped(uint256 tokenId) public view returns (bool) {
         return wrappedNft.ownerOf(tokenId) == address(this);
     }
 
+    /**
+     * @dev Updates the renderer to a new render contract. Can only be called by an address with the UPDATE_RENDERER_ROLE. Emits an EIP4906 BatchMetadataUpdate event
+     *
+     * @param newRenderer the new renderer
+     */
     function setRenderer(
         address newRenderer
     ) public onlyRole(UPDATE_RENDERER_ROLE) {
+        _revokeRole(EMIT_METADATA_ROLE, address(renderer));
         renderer = ITokenURIGenerator(newRenderer);
+        _grantRole(EMIT_METADATA_ROLE, address(renderer));
         emit BatchMetadataUpdate(0, 10000);
     }
 
+    /**
+     * @dev Updates the EIP2981 Royalty info
+     *
+     * @param receiver The receiver of royalties
+     * @param feeNumerator The royalty percent in basis points so 500 = 5%
+     */
     function setDefaultRoyalty(
         address receiver,
         uint96 feeNumerator
-    ) public onlyRole(UPDATE_ROYALTY_ROLE) {
+    ) public onlyRole(TREASURER_ROLE) {
         defaultRoyaltyInfo = RoyaltyInfo(receiver, feeNumerator);
     }
 
-    function wrap(uint256[] calldata tokenIds) public {
+    /**
+     * @dev Returns the EIP2981 royalty info for a token
+     *
+     * @param cost the cost to wrap one token
+     */
+    function setWrapCost(uint256 cost) public onlyRole(TREASURER_ROLE) {
+        wrapCost = cost;
+    }
+
+    /**
+     * @dev Wraps multiple tokens in a single transaction and sends them to the caller
+     *
+     * @param tokenIds the tokens to wrap
+     */
+    function wrap(uint256[] calldata tokenIds) public payable {
+        wrapTo(msg.sender, tokenIds);
+    }
+
+    /**
+     * @dev Wraps multiple tokens in a single transaction and sends them to the specified address
+     *
+     * @param to the address to send the wrapped tokens to
+     * @param tokenIds the tokens to wrap
+     */
+    function wrapTo(address to, uint256[] calldata tokenIds) public payable {
         if (tokenIds.length == 0) revert MustWrapOneToken();
         for (uint256 i = 0; i < tokenIds.length; i++) {
-            wrappedNft.safeTransferFrom(msg.sender, address(this), tokenIds[i]);
+            // Don't use safeTransferFrom as we don't want to trigger the onERC721Received
+            wrappedNft.transferFrom(msg.sender, address(this), tokenIds[i]);
+            _mint(to, tokenIds[i]);
         }
     }
 
@@ -91,26 +138,59 @@ contract WrappedNFT is
         return this.onERC721Received.selector;
     }
 
+    /**
+     * @dev Unwraps a token and sends it to the specified address
+     *
+     * @param to the address to send the wrapped tokens to
+     * @param tokenId the token to unwrap
+     */
     function unwrap(address to, uint256 tokenId) public {
         if (!isWrapped(tokenId)) revert TokenNotWrapped(tokenId);
         if (ownerOf(tokenId) != msg.sender) revert MustOwnToken(tokenId);
         _burn(tokenId);
         wrappedNft.safeTransferFrom(address(this), to, tokenId);
+        emit MetadataUpdate(tokenId);
     }
 
+    /**
+     * @dev Unwraps multiple tokens in a single transaction and sends them to the specified address
+     *
+     * @param to the address to send the wrapped tokens to
+     * @param tokenIds the tokens to unwrap
+     */
     function unwrapMany(address to, uint256[] calldata tokenIds) public {
         for (uint256 i = 0; i < tokenIds.length; i++) {
             unwrap(to, tokenIds[i]);
         }
     }
 
+    /**
+     * @dev Returns the URI for a given token ID
+     *
+     * @param tokenId the tokens ID to retrieve metadata for
+     */
     function tokenURI(
         uint256 tokenId
     ) public view override returns (string memory) {
-        require(isWrapped(tokenId), "not wrapped");
         return renderer.tokenURI(tokenId);
     }
 
+    /**
+     * @dev allows the renderer to emit a metadata update event when metadata changes
+     *
+     * @param tokenId the token ID to emit an update for
+     */
+    function emitMetadataUpdate(
+        uint256 tokenId
+    ) public onlyRole(EMIT_METADATA_ROLE) {
+        emit MetadataUpdate(tokenId);
+    }
+
+    /**
+     * @dev Tests if the contract supports an interface
+     *
+     * @param interfaceId the interface to test
+     */
     function supportsInterface(
         bytes4 interfaceId
     ) public view virtual override(ERC721, AccessControl) returns (bool) {

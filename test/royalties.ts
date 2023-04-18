@@ -21,7 +21,7 @@ describe("royalties", function () {
   it("access control can be applied", async function () {
     const [owner] = await ethers.getSigners();
     await wrappedNft.grantRole(
-      await wrappedNft.UPDATE_ROYALTY_ROLE(),
+      await wrappedNft.TREASURER_ROLE(),
       owner.address
     );
 

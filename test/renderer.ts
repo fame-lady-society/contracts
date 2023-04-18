@@ -36,7 +36,13 @@ describe("renderer", function () {
     const tx = await wrappedNft.setRenderer(testRenderer.getAddress());
     const receipt = await tx.wait();
 
-    const batchMetadataEvent: EventLog = receipt.logs[0];
+    const grantRoleEvent: EventLog = receipt.logs[0];
+    expect(grantRoleEvent.eventName).to.equal("RoleGranted");
+    expect(grantRoleEvent.args[0]).to.equal(
+      await wrappedNft.EMIT_METADATA_ROLE()
+    );
+    expect(grantRoleEvent.args[1]).to.equal(await testRenderer.getAddress());
+    const batchMetadataEvent: EventLog = receipt.logs[1];
     expect(batchMetadataEvent.eventName).to.equal("BatchMetadataUpdate");
     expect(batchMetadataEvent.args[0]).to.equal(0n);
     expect(batchMetadataEvent.args[1]).to.equal(10000n);

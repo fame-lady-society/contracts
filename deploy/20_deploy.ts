@@ -1,9 +1,4 @@
-import { HardhatRuntimeEnvironment } from "hardhat/types";
-import {
-  DeployFunction,
-  Deployment,
-  DeploymentsExtension,
-} from "hardhat-deploy/types";
+import { DeployFunction } from "hardhat-deploy/types";
 import {
   envWrappedTokenAddress,
   envWrappedTokenName,
@@ -17,11 +12,13 @@ const func: DeployFunction = async function ({
   network,
 }) {
   const { deploy } = deployments;
-
+  console.log("deploying WrappedNFT");
   const { deployer } = await getNamedAccounts();
+  console.log("deployer", deployer);
   let wrappedTokenAddress = envWrappedTokenAddress(network.name);
+
   if (!isAddress(wrappedTokenAddress)) {
-    const testNft = await deployments.get("TestNFT");
+    const testNft = await deployments.get("BulkMinter");
     wrappedTokenAddress = testNft.address;
   }
   const wrappedTokenName = envWrappedTokenName(network.name);
@@ -29,10 +26,11 @@ const func: DeployFunction = async function ({
 
   let wrappedTokenRendererAddress = envWrappedTokenAddress(network.name);
   if (!isAddress(wrappedTokenRendererAddress)) {
-    const testNft = await deployments.get("TestNFT");
+    const testNft = await deployments.get("BulkMinter");
     wrappedTokenRendererAddress = testNft.address;
   }
-
+  console.log("wrappedTokenAddress", wrappedTokenAddress);
+  console.log("wrappedTokenRendererAddress", wrappedTokenRendererAddress);
   await deploy("WrappedNFT", {
     from: deployer,
     log: true,
