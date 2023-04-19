@@ -14,6 +14,15 @@ import {
 } from "./utils/env";
 import { HardhatUserConfig, task } from "hardhat/config";
 
+
+task("verify:bulknft", async (args, { deployments, run }) => {
+  const testNft = await deployments.get("BulkMinter");
+  await run("verify:verify", {
+    address: testNft.address,
+    constructorArguments: testNft.args,
+  });
+});
+
 task("verify:testnft", async (args, { deployments, run }) => {
   const testNft = await deployments.get("TestNFT");
   await run("verify:verify", {

@@ -12,9 +12,7 @@ const func: DeployFunction = async function ({
   network,
 }) {
   const { deploy } = deployments;
-  console.log("deploying WrappedNFT");
   const { deployer } = await getNamedAccounts();
-  console.log("deployer", deployer);
   let wrappedTokenAddress = envWrappedTokenAddress(network.name);
 
   if (!isAddress(wrappedTokenAddress)) {
@@ -29,8 +27,7 @@ const func: DeployFunction = async function ({
     const testNft = await deployments.get("BulkMinter");
     wrappedTokenRendererAddress = testNft.address;
   }
-  console.log("wrappedTokenAddress", wrappedTokenAddress);
-  console.log("wrappedTokenRendererAddress", wrappedTokenRendererAddress);
+
   await deploy("WrappedNFT", {
     from: deployer,
     log: true,
