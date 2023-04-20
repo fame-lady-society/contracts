@@ -37,6 +37,7 @@ contract WrappedNFT is
     error MustWrapOneToken();
     error MustOwnToken(uint256 tokenId);
     error TokenNotWrapped(uint256 tokenId);
+    error NotEnoughEther(uint256 required);
 
     constructor(
         string memory name,
@@ -113,6 +114,8 @@ contract WrappedNFT is
      */
     function wrapTo(address to, uint256[] calldata tokenIds) public payable {
         if (tokenIds.length == 0) revert MustWrapOneToken();
+        if (msg.value < wrapCost * tokenIds.length)
+            revert NotEnoughEther(wrapCost * tokenIds.length);
         for (uint256 i = 0; i < tokenIds.length; i++) {
             // Don't use safeTransferFrom as we don't want to trigger the onERC721Received
             wrappedNft.transferFrom(msg.sender, address(this), tokenIds[i]);
@@ -258,8 +261,10 @@ contract WrappedNFT is
      * @dev Withdraws all the funds in the contract
      */
     function withdraw() public onlyRole(TREASURER_ROLE) {
-        address  royaltyReceiver = defaultRoyaltyInfo.receiver;
-         (bool sent, ) = payable(royaltyReceiver).call{value: address(this).balance}("");
+        address royaltyReceiver = defaultRoyaltyInfo.receiver;
+        (bool sent, ) = payable(royaltyReceiver).call{
+            value: address(this).balance
+        }("");
         require(sent, "Failed to send Ether");
     }
 }
