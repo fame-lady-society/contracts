@@ -28,7 +28,7 @@ const func: DeployFunction = async function ({
     wrappedTokenRendererAddress = testNft.address;
   }
 
-  await deploy("WrappedNFT", {
+  await deploy("FameLadySociety", {
     from: deployer,
     log: true,
     args: [
