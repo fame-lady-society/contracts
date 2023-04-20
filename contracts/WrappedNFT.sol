@@ -26,18 +26,23 @@ contract WrappedNFT is
     IERC721 public immutable wrappedNft;
     ITokenURIGenerator public renderer;
     uint256 public wrapCost = 0;
+    address private devDonationAddress;
+    string private conractMetadataURI;
     mapping(uint256 => bool) public claimed;
 
-    bytes32 public constant UPDATE_RENDERER_ROLE =
-        keccak256("UPDATE_RENDERER_ROLE");
     bytes32 public constant TREASURER_ROLE = keccak256("TREASURER_ROLE");
     bytes32 public constant EMIT_METADATA_ROLE =
         keccak256("EMIT_METADATA_ROLE");
+    bytes32 public constant UPDATE_RENDERER_ROLE =
+        keccak256("UPDATE_RENDERER_ROLE");
 
     error MustWrapOneToken();
     error MustOwnToken(uint256 tokenId);
     error TokenNotWrapped(uint256 tokenId);
     error NotEnoughEther(uint256 required);
+    error DevTipFailed();
+    error WithdrawFailed();
+    error NoContractUri();
 
     constructor(
         string memory name,
@@ -49,52 +54,7 @@ contract WrappedNFT is
         renderer = ITokenURIGenerator(tokenRenderer);
         transferOwnership(msg.sender);
         _grantRole(AccessControl.DEFAULT_ADMIN_ROLE, msg.sender);
-    }
-
-    /**
-     * @dev Returns true of the tokenId is wrapped (owned by this contract)
-     *
-     * @param tokenId the token to check if wrapped
-     * @return bool
-     */
-    function isWrapped(uint256 tokenId) public view returns (bool) {
-        return wrappedNft.ownerOf(tokenId) == address(this);
-    }
-
-    /**
-     * @dev Updates the renderer to a new render contract. Can only be called by an address with the UPDATE_RENDERER_ROLE. Emits an EIP4906 BatchMetadataUpdate event
-     *
-     * @param newRenderer the new renderer
-     */
-    function setRenderer(
-        address newRenderer
-    ) public onlyRole(UPDATE_RENDERER_ROLE) {
-        _revokeRole(EMIT_METADATA_ROLE, address(renderer));
-        renderer = ITokenURIGenerator(newRenderer);
-        _grantRole(EMIT_METADATA_ROLE, address(renderer));
-        emit BatchMetadataUpdate(0, 10000);
-    }
-
-    /**
-     * @dev Updates the EIP2981 Royalty info
-     *
-     * @param receiver The receiver of royalties
-     * @param feeNumerator The royalty percent in basis points so 500 = 5%
-     */
-    function setDefaultRoyalty(
-        address receiver,
-        uint96 feeNumerator
-    ) public onlyRole(TREASURER_ROLE) {
-        defaultRoyaltyInfo = RoyaltyInfo(receiver, feeNumerator);
-    }
-
-    /**
-     * @dev Returns the EIP2981 royalty info for a token
-     *
-     * @param cost the cost to wrap one token
-     */
-    function setWrapCost(uint256 cost) public onlyRole(TREASURER_ROLE) {
-        wrapCost = cost;
+        devDonationAddress = msg.sender;
     }
 
     /**
@@ -114,8 +74,17 @@ contract WrappedNFT is
      */
     function wrapTo(address to, uint256[] calldata tokenIds) public payable {
         if (tokenIds.length == 0) revert MustWrapOneToken();
-        if (msg.value < wrapCost * tokenIds.length)
-            revert NotEnoughEther(wrapCost * tokenIds.length);
+        uint256 totalCost = wrapCost * tokenIds.length;
+        if (msg.value < totalCost)
+            revert NotEnoughEther(totalCost);
+        // leftover value is sent to the dev donation address
+
+        if (msg.value > totalCost) {
+            (bool sent, ) = payable(devDonationAddress).call{
+                value: msg.value - totalCost
+            }("");
+            if (!sent) revert DevTipFailed();
+        }
         for (uint256 i = 0; i < tokenIds.length; i++) {
             // Don't use safeTransferFrom as we don't want to trigger the onERC721Received
             wrappedNft.transferFrom(msg.sender, address(this), tokenIds[i]);
@@ -176,6 +145,14 @@ contract WrappedNFT is
         uint256 tokenId
     ) public view override returns (string memory) {
         return renderer.tokenURI(tokenId);
+    }
+
+    /**
+     * @dev Returns the contract URI
+     */
+    function contractURI() public view returns (string memory) {
+        if (bytes(conractMetadataURI).length == 0) revert NoContractUri();
+        return conractMetadataURI;
     }
 
     /**
@@ -265,6 +242,58 @@ contract WrappedNFT is
         (bool sent, ) = payable(royaltyReceiver).call{
             value: address(this).balance
         }("");
-        require(sent, "Failed to send Ether");
+        if (!sent) revert WithdrawFailed();
+    }
+
+    /**
+     * @dev Returns true of the tokenId is wrapped (owned by this contract)
+     *
+     * @param tokenId the token to check if wrapped
+     * @return bool
+     */
+    function isWrapped(uint256 tokenId) public view returns (bool) {
+        return wrappedNft.ownerOf(tokenId) == address(this);
+    }
+
+    /**
+     * @dev Updates the renderer to a new render contract. Can only be called by an address with the UPDATE_RENDERER_ROLE. Emits an EIP4906 BatchMetadataUpdate event
+     *
+     * @param newRenderer the new renderer
+     */
+    function setRenderer(
+        address newRenderer
+    ) public onlyRole(UPDATE_RENDERER_ROLE) {
+        _revokeRole(EMIT_METADATA_ROLE, address(renderer));
+        renderer = ITokenURIGenerator(newRenderer);
+        _grantRole(EMIT_METADATA_ROLE, address(renderer));
+        emit BatchMetadataUpdate(0, 10000);
+    }
+
+    function setContractURI(
+        string memory uri
+    ) public onlyRole(UPDATE_RENDERER_ROLE) {
+        conractMetadataURI = uri;
+    }
+
+    /**
+     * @dev Updates the EIP2981 Royalty info
+     *
+     * @param receiver The receiver of royalties
+     * @param feeNumerator The royalty percent in basis points so 500 = 5%
+     */
+    function setDefaultRoyalty(
+        address receiver,
+        uint96 feeNumerator
+    ) public onlyRole(TREASURER_ROLE) {
+        defaultRoyaltyInfo = RoyaltyInfo(receiver, feeNumerator);
+    }
+
+    /**
+     * @dev Returns the EIP2981 royalty info for a token
+     *
+     * @param cost the cost to wrap one token
+     */
+    function setWrapCost(uint256 cost) public onlyRole(TREASURER_ROLE) {
+        wrapCost = cost;
     }
 }

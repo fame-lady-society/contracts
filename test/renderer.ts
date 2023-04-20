@@ -1,5 +1,5 @@
 import { expect } from "chai";
-import { BaseContract, EventFragment, EventLog } from "ethers";
+import { BaseContract, EventFragment, EventLog, keccak256 } from "ethers";
 import { ethers } from "hardhat";
 import { defaultFactory } from "./utils/factory";
 
@@ -46,5 +46,18 @@ describe("renderer", function () {
     expect(batchMetadataEvent.eventName).to.equal("BatchMetadataUpdate");
     expect(batchMetadataEvent.args[0]).to.equal(0n);
     expect(batchMetadataEvent.args[1]).to.equal(10000n);
+  });
+
+  it("can emit metadata", async function () {
+    await testRenderer.setEmittableMetadata(await wrappedNft.getAddress());
+    const tx = await testRenderer.emitMetadata(1);
+    const receipt = await tx.wait();
+    const metadataEvent: EventLog = receipt.logs[0];
+
+    expect(keccak256(ethers.toUtf8Bytes("MetadataUpdate(uint256)"))).to.equal(
+      metadataEvent.topics[0]
+    );
+    expect(BigInt(metadataEvent.data)).to.equal(1n);
+    expect(metadataEvent.address).to.equal(await wrappedNft.getAddress());
   });
 });

@@ -93,7 +93,7 @@ describe("WrapNFT", function () {
     await userTestNft.setApprovalForAll(await wrappedNft.getAddress(), true);
 
     // now wrap the NFT
-    expect(userWrappedNft.wrap([1])).to.be.reverted;
+    await expect(userWrappedNft.wrap([1])).to.be.reverted;
 
     // now add some funds
     await userWrappedNft.wrap([1], { value: parseEther("0.01") });
@@ -113,6 +113,47 @@ describe("WrapNFT", function () {
     ).to.equal(0);
     expect(await ethers.provider.getBalance(royalties.address)).to.equal(
       parseEther("10000.01")
+    );
+  });
+
+  it("Dev can be tipped", async function () {
+    const { owner, testNft, wrappedNft } = await defaultFactory();
+    const royalties = (await ethers.getSigners())[2];
+    const recipient = (await ethers.getSigners())[3];
+    await wrappedNft.grantRole(
+      await wrappedNft.TREASURER_ROLE(),
+      owner.address
+    );
+
+    const userTestNft = testNft.connect(recipient);
+    const userWrappedNft = wrappedNft.connect(recipient);
+
+    // now mint a token
+    await userTestNft.mint(recipient.address, 1);
+    await userTestNft.setApprovalForAll(await wrappedNft.getAddress(), true);
+
+    // now wrap the NFT
+    await expect(
+      userWrappedNft.wrap([1], { value: parseEther("0.01") })
+    ).to.changeEtherBalance(owner.address, parseEther("0.01"));
+
+    // now enable sales
+    await wrappedNft.setWrapCost(parseEther("0.01"));
+    await wrappedNft.setDefaultRoyalty(royalties.address, 500);
+
+    // now mint a token
+    await userTestNft.mint(recipient.address, 2);
+    await userTestNft.setApprovalForAll(await wrappedNft.getAddress(), true);
+
+    // now add some funds
+    await expect(
+      userWrappedNft.wrap([2], { value: parseEther("0.02") })
+    ).to.changeEtherBalance(owner.address, parseEther("0.01"));
+
+    // Now extract funds
+    await expect(wrappedNft.withdraw()).to.changeEtherBalances(
+      [await wrappedNft.getAddress(), royalties.address],
+      [-parseEther("0.01"), parseEther("0.01")]
     );
   });
 });
