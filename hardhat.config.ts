@@ -14,7 +14,6 @@ import {
 } from "./utils/env";
 import { HardhatUserConfig, task } from "hardhat/config";
 
-
 task("verify:bulknft", async (args, { deployments, run }) => {
   const testNft = await deployments.get("BulkMinter");
   await run("verify:verify", {
@@ -39,7 +38,7 @@ task("verify:wrappednft", async (args, { deployments, run }) => {
   });
 });
 
-const [goerliWallet] = ["goerli"].map((network) =>
+const [goerliWallet] = ["goerli", "homestead"].map((network) =>
   Wallet.fromEncryptedJsonSync(
     fs.readFileSync(envDeploymentKeyFile(network), "utf8"),
     envDeploymentKeyPassword(network)
@@ -58,6 +57,10 @@ export default {
   networks: {
     goerli: {
       url: envRpc("goerli"),
+      accounts: [goerliWallet.privateKey],
+    },
+    homestead: {
+      url: envRpc("homestead"),
       accounts: [goerliWallet.privateKey],
     },
   },

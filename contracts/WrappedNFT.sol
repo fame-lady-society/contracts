@@ -253,4 +253,13 @@ contract WrappedNFT is
 
         return (defaultRoyaltyInfo.receiver, royaltyAmount);
     }
+
+    /**
+     * @dev Withdraws all the funds in the contract
+     */
+    function withdraw() public onlyRole(TREASURER_ROLE) {
+        address  royaltyReceiver = defaultRoyaltyInfo.receiver;
+         (bool sent, ) = payable(royaltyReceiver).call{value: address(this).balance}("");
+        require(sent, "Failed to send Ether");
+    }
 }
