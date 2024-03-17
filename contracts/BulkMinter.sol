@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.16;
 
-import {ERC721} from "solmate/src/tokens/ERC721.sol";
+import {ERC721A} from "erc721a/contracts/ERC721A.sol";
+import {IERC721A} from "erc721a/contracts/IERC721A.sol";
+import {ERC721AQueryable} from "erc721a/contracts/extensions/ERC721AQueryable.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 
-contract BulkMinter is ERC721 {
+contract BulkMinter is ERC721AQueryable {
     using Strings for uint256;
-    string private _baseURI;
+    string private __baseURI;
     uint128 public constant MAX_SUPPLY = 10000;
     uint128 public lastMintedTokenId = 0;
 
@@ -14,24 +16,18 @@ contract BulkMinter is ERC721 {
         string memory name,
         string memory symbol,
         string memory uri
-    ) ERC721(name, symbol) {
-        _baseURI = uri;
+    ) ERC721A(name, symbol) {
+        __baseURI = uri;
     }
 
     function mint(uint128 count) public {
-        if (lastMintedTokenId + count > MAX_SUPPLY - 1) {
+        if (totalSupply() + count > MAX_SUPPLY - 1) {
             revert("Max supply reached");
         }
-        uint256 startMintFrom = lastMintedTokenId;
-        lastMintedTokenId += count;
-        for (uint256 i = 0; i < count; i++) {
-            _mint(msg.sender, startMintFrom + i);
-        }
+        _mint(msg.sender, count);
     }
 
-    function tokenURI(
-        uint256 tokenId
-    ) public view override returns (string memory) {
-        return string(abi.encodePacked(_baseURI, tokenId.toString()));
+    function _baseURI() internal view override returns (string memory) {
+        return __baseURI;
     }
 }

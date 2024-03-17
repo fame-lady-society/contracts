@@ -13,7 +13,7 @@ function environmentFetcher(envName: string) {
 
 export const envDeploymentKeyFile = environmentFetcher("DEPLOYMENT_KEY_FILE");
 export const envDeploymentKeyPassword = environmentFetcher(
-  "DEPLOYMENT_KEY_PASSWORD"
+  "DEPLOYMENT_KEY_PASSWORD",
 );
 export const envBaseURI = environmentFetcher("BASE_URI");
 export const envTestName = environmentFetcher("TEST_NAME");
@@ -22,7 +22,8 @@ export const envWrappedTokenAddress = environmentFetcher("WRAPPED_TOKEN");
 export const envWrappedTokenName = environmentFetcher("WRAPPED_TOKEN_NAME");
 export const envWrappedTokenSymbol = environmentFetcher("WRAPPED_TOKEN_SYMBOL");
 export const envWrappedTokenRendererAddress = environmentFetcher(
-  "WRAPPED_TOKEN_RENDERER"
+  "WRAPPED_TOKEN_RENDERER",
 );
 export const envRpc = environmentFetcher("RPC");
 export const envEtherscanApiKey = environmentFetcher("ETHERSCAN_API_KEY");
+export const envSignerPrivateKey = environmentFetcher("SIGNER_PRIVATE_KEY");
