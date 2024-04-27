@@ -51,7 +51,20 @@ task("verify:named", async (args, { deployments, run }) => {
   });
 });
 
-const [goerliWallet] = ["goerli", "homestead"].map((network) =>
+task("verify:society", async (args, { deployments, run }) => {
+  const contract = await deployments.get("SocietyShowcase");
+  await run("verify:verify", {
+    address: contract.address,
+    constructorArguments: contract.args,
+    contract: "contracts/SocietyShowcase.sol:SocietyShowcase",
+  });
+});
+
+const [polygonWallet, sepoliaWallet, mainnetWallet] = [
+  "polygon",
+  "sepolia",
+  "homestead",
+].map((network) =>
   Wallet.fromEncryptedJsonSync(
     fs.readFileSync(envDeploymentKeyFile(network), "utf8"),
     envDeploymentKeyPassword(network),
@@ -59,7 +72,7 @@ const [goerliWallet] = ["goerli", "homestead"].map((network) =>
 );
 
 export default {
-  solidity: "0.8.18",
+  solidity: "0.8.24",
   gasReporter: {
     currency: "USD",
     coinmarketcap: process.env.COINMARKETCAP_API_KEY,
@@ -69,20 +82,24 @@ export default {
     signer: 1,
   },
   networks: {
-    goerli: {
-      url: envRpc("goerli"),
-      accounts: [goerliWallet.privateKey],
-    },
     sepolia: {
       url: envRpc("sepolia"),
-      accounts: [goerliWallet.privateKey, envSignerPrivateKey("sepolia")],
+      accounts: [sepoliaWallet.privateKey, envSignerPrivateKey("sepolia")],
     },
     homestead: {
       url: envRpc("homestead"),
-      accounts: [goerliWallet.privateKey],
+      accounts: [mainnetWallet.privateKey],
+    },
+    polygon: {
+      url: envRpc("polygon"),
+      accounts: [polygonWallet.privateKey],
     },
   },
   etherscan: {
-    apiKey: envEtherscanApiKey("sepolia"),
+    apiKey: {
+      mainnet: envEtherscanApiKey("mainnet"),
+      goerli: envEtherscanApiKey("sepolia"),
+      polygon: envEtherscanApiKey("polygon"),
+    },
   },
 } as HardhatUserConfig;
