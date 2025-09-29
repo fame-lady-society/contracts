@@ -131,4 +131,44 @@ describe("WrapNFT", function () {
       [-parseEther("0.01"), parseEther("0.01")]
     );
   });
+
+  it("Wrap and donate sends wrapped token to vault and restores fee", async function () {
+    const { owner, testNft, wrappedNft } = await defaultFactory();
+    const [, user, , , vault] = await ethers.getSigners();
+
+    const DonationFactory = await ethers.getContractFactory(
+      "WrappedNFTDonationVault"
+    );
+    const donationVault = await DonationFactory.deploy(
+      await wrappedNft.getAddress(),
+      vault.address
+    );
+
+    await wrappedNft.grantRole(
+      await wrappedNft.TREASURER_ROLE(),
+      owner.address
+    );
+    await wrappedNft.setWrapCost(parseEther("0.02"));
+    await wrappedNft.grantRole(
+      await wrappedNft.TREASURER_ROLE(),
+      await donationVault.getAddress()
+    );
+
+    await testNft.mint(user.address, 42);
+    await testNft
+      .connect(user)
+      .setApprovalForAll(await donationVault.getAddress(), true);
+
+    const previousCost = await wrappedNft.wrapCost();
+    await expect(
+      donationVault.connect(user).wrapAndDonate([42])
+    )
+      .to.emit(donationVault, "WrappedAndDonated")
+      .withArgs(user.address, vault.address, [42n]);
+
+    expect(await wrappedNft.wrapCost()).to.equal(previousCost);
+    expect(await testNft.ownerOf(42)).to.equal(await wrappedNft.getAddress());
+    expect(await wrappedNft.balanceOf(vault.address)).to.equal(1n);
+    expect(await wrappedNft.ownerOf(42)).to.equal(vault.address);
+  });
 });

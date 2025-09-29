@@ -51,6 +51,15 @@ task("verify:named", async (args, { deployments, run }) => {
   });
 });
 
+task("verify:rescuer", async (args, { deployments, run }) => {
+  const contract = await deployments.get("Rescuer");
+  await run("verify:verify", {
+    address: contract.address,
+    constructorArguments: contract.args,
+    contract: "contracts/Rescuer.sol:Rescuer",
+  });
+});
+
 task("verify:society", async (args, { deployments, run }) => {
   const contract = await deployments.get("SocietyShowcase");
   await run("verify:verify", {
@@ -74,6 +83,7 @@ const [polygonWallet, sepoliaWallet, mainnetWallet] = [
 export default {
   solidity: "0.8.24",
   gasReporter: {
+    enabled: process.env.REPORT_GAS === "true",
     currency: "USD",
     coinmarketcap: process.env.COINMARKETCAP_API_KEY,
   },
