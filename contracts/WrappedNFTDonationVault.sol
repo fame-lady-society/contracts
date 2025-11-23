@@ -2,7 +2,7 @@
 pragma solidity ^0.8.16;
 
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import {ReentrancyGuard} from "solady/src/utils/ReentrancyGuard.sol";
 import {WrappedNFT} from "./WrappedNFT.sol";
 
 contract WrappedNFTDonationVault is ReentrancyGuard {

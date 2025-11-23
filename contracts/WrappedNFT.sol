@@ -14,7 +14,6 @@ import {IERC4906} from "./IERC4906.sol";
 contract WrappedNFT is
     AccessControl,
     ERC721,
-    Ownable2Step,
     OperatorFilterer,
     IERC4906
 {
@@ -52,7 +51,6 @@ contract WrappedNFT is
     ) ERC721(name, symbol) OperatorFilterer(CANONICAL_CORI_SUBSCRIPTION, true) {
         wrappedNft = IERC721(nftContract);
         renderer = ITokenURIGenerator(tokenRenderer);
-        transferOwnership(msg.sender);
         _grantRole(AccessControl.DEFAULT_ADMIN_ROLE, msg.sender);
         devDonationAddress = msg.sender;
     }
