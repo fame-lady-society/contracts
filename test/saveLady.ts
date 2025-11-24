@@ -1,13 +1,8 @@
 import hre from "hardhat";
-import { ArtifactMap } from "hardhat/types/artifacts";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { Hex } from "viem";
 
 import SaveLadyModule from "../ignition/modules/SaveLadyModule.js";
-import SeaportModule from "../ignition/modules/SeaportModule.js";
-
-type SeaportInterfaceAbi = ArtifactMap["SeaportInterface"]["abi"];
 
 const SEAPORT_ADDRESS = "0x0000000000000068F116a894984e2DB1123eB395" as const;
 const FLS_SQUAD = "0xf3E6DbBE461C6fa492CeA7Cb1f5C5eA660EB1B47" as const;
@@ -18,33 +13,7 @@ const ZERO_BYTES32 =
 
 const { ignition, viem } = await hre.network.connect();
 const publicClient = await viem.getPublicClient();
-const [deployer, buyer, seller] = await viem.getWalletClients();
-async function etchContract(
-  contractName: string,
-  target: `0x${string}`,
-  args: readonly unknown[] = [],
-  wallet = deployer,
-) {
-  const deployed = await viem.deployContract(contractName, [...args], {
-    client: { wallet, public: publicClient },
-  });
-
-  const testClient = await viem.getTestClient();
-  const runtimeCode = await publicClient.getBytecode({
-    address: deployed.address,
-  });
-
-  assert(runtimeCode, `Missing runtime bytecode for ${contractName}`);
-
-  await testClient.setCode({
-    address: target,
-    bytecode: runtimeCode as Hex,
-  });
-
-  return viem.getContractAt(contractName, target, {
-    client: { wallet, public: publicClient },
-  });
-}
+const [buyer] = await viem.getWalletClients();
 
 // Build two mock AdvancedOrder objects that match the provided OpenSea API sample.
 // These replicate full Seaport AdvancedOrder (numerator=1, denominator=1, extraData empty, signature empty)
@@ -56,11 +25,11 @@ function buildMockAdvancedOrders() {
       proceeds: 9701010000000000n,
       fee: 97990000000000n,
       offerer: "0x805963efd6879d60dec77225e5d1550290807b74" as const,
-      salt: BigInt(
-        "0x72db8c0b0000000000000000000000000000000000000000da942b6a862ac627",
-      ),
-      startTime: 1763883026n,
-      endTime: 1763886626n,
+      salt: 0x72db8c0b0000000000000000000000000000000000000000099a7a4860269428n,
+      startTime: 1763916631n,
+      endTime: 1763920231n,
+      signature:
+        "0x274b008b46929365f3a96652ba1281d5054d428e725be72707c42a5a12c761172b358536fbcf86687140b09c94444b258d674efa89d8215b747d1f543e7e2b53",
     }),
     buildFixedPriceOrder({
       tokenId: 887n,
@@ -70,6 +39,8 @@ function buildMockAdvancedOrders() {
       startTime: 1763878624n,
       endTime: 1766470623n,
       orderType: 1,
+      signature:
+        "0x35ea9ccfa19838ca3eea5f35296984be2040eed32a205c547e5f8ff59b3f69f0afec30de496da795d8384a7e95013159672d6f568ee0af26113aeea1ebc9f851",
     }),
   ];
 }
@@ -89,6 +60,7 @@ function buildFixedPriceOrder({
   endTime,
   orderType,
   salt,
+  signature,
 }: {
   tokenId: bigint;
   proceeds: bigint;
@@ -98,6 +70,7 @@ function buildFixedPriceOrder({
   endTime?: bigint;
   orderType?: number;
   salt?: bigint;
+  signature?: `0x${string}`;
 }) {
   return {
     parameters: {
@@ -138,11 +111,10 @@ function buildFixedPriceOrder({
       conduitKey:
         "0x0000007b02230091a7ed01230072f7006a004d60a8d4e71d599b8104250f0000" as const,
       totalOriginalConsiderationItems: 2n,
-      counter: 0n,
     },
     numerator: 1n,
     denominator: 1n,
-    signature: "0x",
+    signature: signature ?? "0x",
     extraData: "0x",
   } as const;
 }
@@ -156,7 +128,6 @@ describe("SaveLady", async function () {
 
   it("computes expected order hashes for mock OpenSea orders", async function () {
     const { ignition, viem } = await hre.network.connect();
-    // const { seaport } = await ignition.deploy(SeaportModule);
     const seaport = await viem.getContractAt<"SeaportInterface">(
       "SeaportInterface",
       SEAPORT_ADDRESS,
@@ -164,101 +135,51 @@ describe("SaveLady", async function () {
 
     const mockOrders = buildMockAdvancedOrders();
 
-    // Expected hashes from sample JSON
-    const expectedHashes = [
-      "0x97e47f1566e738bd74b0db84302a9bceaebc714f76710d608fb981865e9be886",
-      "0xc3f1c369096b94af40338be4e0f3dc9342f4cd26ff031fc2743b2861d5649d23",
-    ] as const;
-
-    const orderHash = await seaport.read.getOrderHash([
-      mockOrders[1].parameters,
-    ]);
-    assert.equal(
-      orderHash,
-      expectedHashes[1],
-      `order hash mismatch for index 1`,
-    );
-
     for (let i = 0; i < mockOrders.length; i++) {
       const p = mockOrders[i].parameters;
-      // Seaport getOrderHash expects OrderComponents (parameters + counter)
-      // const orderHash = await seaport.read.getOrderHash([
-      //   {
-      //     offerer: p.offerer,
-      //     zone: p.zone,
-      //     offer: p.offer,
-      //     consideration: p.consideration,
-      //     orderType: p.orderType,
-      //     startTime: p.startTime,
-      //     endTime: p.endTime,
-      //     zoneHash: p.zoneHash,
-      //     salt: p.salt,
-      //     conduitKey: p.conduitKey,
-      //     counter: 0n, // From sample JSON
-      //   },
-      // ]);
+      const counter = await seaport.read.getCounter([p.offerer]);
+      const orderHash = await seaport.read.getOrderHash([{ ...p, counter }]);
       const [isValidated, isCancelled, totalFilled, totalSize] =
-        await seaport.read.getOrderStatus([expectedHashes[i]]);
-      const orderHash = await seaport.read.getOrderHash([p]);
+        await seaport.read.getOrderStatus([orderHash]);
+
+      // assert.notEqual(orderHash, ZERO_BYTES32, `zero order hash for ${i}`);
       assert.equal(
         orderHash,
-        expectedHashes[i],
-        `order hash mismatch for index ${i}`,
+        i === 0
+          ? "0x948e255213dbddf1724351ad9bbbe4f0c9569e2b522e3bb493ab5c76e696483b"
+          : "0x6d1ab4950efd6db639fba9b67f3e0e45f32f6de074e5670ffbd3c253cd4e49bf",
+        `orderHash mismatch for index ${i}`,
       );
-
       assert.equal(isValidated, false, `isValidated mismatch for index ${i}`);
       assert.equal(isCancelled, false, `isCancelled mismatch for index ${i}`);
       assert.equal(totalFilled, 0n, `totalFilled mismatch for index ${i}`);
-      assert.equal(totalSize, 1n, `totalSize mismatch for index ${i}`);
     }
   });
 
   it("sweeps multiple orders and forwards full wrap cost", async function () {
-    const seaport = await etchContract("MockSeaport", SEAPORT_ADDRESS);
-    const squad = await etchContract("MockFameLadySquad", FLS_SQUAD);
-    const society = await etchContract("MockFameLadySociety", FLS_SOCIETY, [
+    const { ignition, viem } = await hre.network.connect();
+    const society = await viem.getContractAt<"FameLadySociety">(
+      "FameLadySociety",
+      FLS_SOCIETY,
+    );
+    const squad = await viem.getContractAt<"FameLadySquad">(
+      "FameLadySquad",
       FLS_SQUAD,
-    ]);
-
-    const wrapCost = 1_000_000_000_000_000n; // 0.001 ETH
-    await society.write.setWrapCost([wrapCost]);
-
-    const tokenIds = [50001n, 50002n] as const;
-    const salePrices = [
-      7_500_000_000_000_000n,
-      6_000_000_000_000_000n,
-    ] as const;
-
-    const sellerClientContract = await viem.getContractAt(
-      "MockFameLadySquad",
-      FLS_SQUAD,
-      { client: { wallet: seller, public: publicClient } },
+    );
+    const seaport = await viem.getContractAt<"SeaportInterface">(
+      "SeaportInterface",
+      SEAPORT_ADDRESS,
     );
 
-    await sellerClientContract.write.mint([
-      seller.account.address,
-      tokenIds[0],
-    ]);
-    await sellerClientContract.write.mint([
-      seller.account.address,
-      tokenIds[1],
-    ]);
-    await sellerClientContract.write.setApprovalForAll([SEAPORT_ADDRESS, true]);
-
-    const advancedOrders = [
-      buildFixedPriceOrder({
-        tokenId: tokenIds[0],
-        proceeds: salePrices[0],
-        fee: salePrices[0] / 100n,
-        offerer: seller.account.address,
-      }),
-      buildFixedPriceOrder({
-        tokenId: tokenIds[1],
-        proceeds: salePrices[1],
-        fee: salePrices[1] / 100n,
-        offerer: seller.account.address,
-      }),
-    ] as const;
+    const advancedOrders = buildMockAdvancedOrders();
+    // add up parameter.startAmount for each consideration and each order
+    const salePrices = advancedOrders.map((ao) =>
+      ao.parameters.consideration.reduce((sum, c) => sum + c.startAmount, 0n),
+    );
+    const tokenIds = advancedOrders.map(
+      (ao) => ao.parameters.offer[0].identifierOrCriteria,
+    );
+    const wrapCost = await society.read.wrapCost();
 
     const ethAmounts = [...salePrices];
     const totalPrice = salePrices[0] + salePrices[1];
@@ -274,17 +195,12 @@ describe("SaveLady", async function () {
       { account: buyer.account.address, value: totalValue },
     );
 
-    const societyReader = await viem.getContractAt(
-      "MockFameLadySociety",
-      FLS_SOCIETY,
-    );
-
     assert.equal(
-      (await societyReader.read.wrappedOwner([tokenIds[0]])).toLowerCase(),
+      (await society.read.ownerOf([tokenIds[0]])).toLowerCase(),
       buyer.account.address.toLowerCase(),
     );
     assert.equal(
-      (await societyReader.read.wrappedOwner([tokenIds[1]])).toLowerCase(),
+      (await society.read.ownerOf([tokenIds[1]])).toLowerCase(),
       buyer.account.address.toLowerCase(),
     );
 

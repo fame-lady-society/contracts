@@ -104,8 +104,9 @@ export default defineConfig({
     ["hardhat-seaport"]: {
       forking: {
         url: process.env.HOMESTEAD_RPC!,
-        blockNumber: 23860332,
+        blockNumber: 23863154,
       },
+      chainId: 1,
       type: "edr-simulated",
     },
     sepolia: {

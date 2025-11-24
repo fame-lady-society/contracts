@@ -92,7 +92,9 @@ contract SaveLady is
     _initializeOwner(msg.sender);
   }
 
-  function _authorizeUpgrade(address) internal override onlyOwner {}
+  function _authorizeUpgrade(address) internal override onlyOwner {
+    // Only owner can upgrade.
+  }
 
   // ----------------------------
   //        Main entrypoint

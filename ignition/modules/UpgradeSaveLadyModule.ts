@@ -9,7 +9,12 @@ export default buildModule("UpgradeModule", (m) => {
 
   const saveLady = m.contract("SaveLady");
 
-  m.call(proxyAdmin, "upgradeAndCall", [proxy, saveLady, "0x"], {
+  // Call the upgrade-time initializer to set proxy storage ownership.
+  const encodedFunctionCall = m.encodeFunctionCall(saveLady, "upgradeInit", [
+    proxyAdminOwner,
+  ]);
+
+  m.call(proxyAdmin, "upgradeAndCall", [proxy, saveLady, encodedFunctionCall], {
     from: proxyAdminOwner,
   });
 
