@@ -65,16 +65,29 @@ import { hardhat } from "viem/chains";
 //   });
 // });
 
-const [polygonWallet, sepoliaWallet, mainnetWallet] = [
-  "polygon",
-  "sepolia",
-  "homestead",
-].map((network) =>
-  Wallet.fromEncryptedJsonSync(
-    fs.readFileSync(envDeploymentKeyFile(network), "utf8"),
-    envDeploymentKeyPassword(network),
-  ),
-);
+function loadWallet(network: string) {
+  try {
+    const keyFile = envDeploymentKeyFile(network);
+    const password = envDeploymentKeyPassword(network);
+    
+    if (!keyFile || !password || !fs.existsSync(keyFile)) {
+      return null;
+    }
+    
+    return Wallet.fromEncryptedJsonSync(
+      fs.readFileSync(keyFile, "utf8"),
+      password,
+    );
+  } catch (error) {
+    console.warn(`Failed to load wallet for ${network}:`, (error as Error).message);
+    return null;
+  }
+}
+
+const polygonWallet = loadWallet("polygon");
+const sepoliaWallet = loadWallet("sepolia");
+const baseSepoliaWallet = loadWallet("baseSepolia");
+const mainnetWallet = loadWallet("homestead");
 
 export default defineConfig({
   // gasReporter: {
@@ -101,39 +114,63 @@ export default defineConfig({
     ],
   },
   networks: {
-    ["hardhat-seaport"]: {
-      forking: {
-        url: process.env.HOMESTEAD_RPC!,
-        blockNumber: 23863154,
-      },
-      chainId: 1,
-      type: "edr-simulated",
-    },
-    sepolia: {
-      url: envRpc("sepolia"),
-      accounts: [sepoliaWallet.privateKey, envSignerPrivateKey("sepolia")],
-      type: "http",
-    },
-    homestead: {
-      url: envRpc("homestead"),
-      accounts: [mainnetWallet.privateKey],
-      type: "http",
-    },
-    polygon: {
-      url: envRpc("polygon"),
-      accounts: [polygonWallet.privateKey],
-      type: "http",
-    },
+    ...(process.env.HOMESTEAD_RPC
+      ? {
+          ["hardhat-seaport"]: {
+            forking: {
+              url: process.env.HOMESTEAD_RPC,
+              blockNumber: 23863154,
+            },
+            chainId: 1,
+            type: "edr-simulated" as const,
+          },
+        }
+      : {}),
+    ...(sepoliaWallet && envRpc("sepolia")
+      ? {
+          sepolia: {
+            url: envRpc("sepolia"),
+            accounts: [
+              sepoliaWallet.privateKey,
+              ...(envSignerPrivateKey("sepolia") ? [envSignerPrivateKey("sepolia")] : []),
+            ],
+            type: "http" as const,
+          },
+        }
+      : {}),
+    
+    ...(mainnetWallet && envRpc("homestead")
+      ? {
+          homestead: {
+            url: envRpc("homestead"),
+            accounts: [mainnetWallet.privateKey],
+            type: "http" as const,
+          },
+        }
+      : {}),
+    ...(polygonWallet && envRpc("polygon")
+      ? {
+          polygon: {
+            url: envRpc("polygon"),
+            accounts: [polygonWallet.privateKey],
+            type: "http" as const,
+          },
+        }
+      : {}),
+    ...(baseSepoliaWallet && envRpc("baseSepolia")
+      ? {
+          "base-sepolia": {
+            url: envRpc("baseSepolia"),
+            accounts: [baseSepoliaWallet.privateKey],
+            type: "http" as const,
+          },
+        }
+      : {}),
   },
   verify: {
     etherscan: {
-      apiKey: envEtherscanApiKey("mainnet"),
-      enabled: true,
-      // apiKey: {
-      //   mainnet: envEtherscanApiKey("mainnet"),
-      //   goerli: envEtherscanApiKey("sepolia"),
-      //   polygon: envEtherscanApiKey("polygon"),
-      // },
+      apiKey: envEtherscanApiKey("mainnet") || "dummy-key",
+      enabled: !!envEtherscanApiKey("mainnet"),
     },
   },
 });

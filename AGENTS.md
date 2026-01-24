@@ -26,7 +26,8 @@ This Hardhat-based Solidity project maintains the Fame Lady Society wrapped NFT 
 ## Testing Guidelines
 
 - Name suites after the contract (`describe("WrappedNFT")`) and child blocks after behaviors (`"wrap"`, `"unwrap"`).
-- Run `yarn hardhat test [path to test]`.
+- Run `dev-vault run fls-contracts yarn hardhat test [path to test]`.
+- Add `--netowrk hardhat-seaport` if running `test/saveLady.ts` or all tests
 
 ## Commit & Pull Request Guidelines
 
