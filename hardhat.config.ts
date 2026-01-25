@@ -102,11 +102,20 @@ export default defineConfig({
   // },
   plugins: [hardhatToolboxViemPlugin, hardhatVerify],
   solidity: {
-    compilers: [
-      {
+    profiles: {
+      default: {
         version: "0.8.24",
       },
-    ],
+      lowop: {
+        version: "0.8.24",
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 2000,
+          },
+        },
+      },
+    },
     npmFilesToBuild: [
       "@openzeppelin/contracts/proxy/transparent/ProxyAdmin.sol",
       "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol",

@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {ERC721} from "solmate/src/tokens/ERC721.sol";
 import {OwnableRoles} from "solady/src/auth/OwnableRoles.sol";
 import {LibString} from "solady/src/utils/LibString.sol";
+import {ECDSA} from "solady/src/utils/ECDSA.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 
 /// @title FLSNaming - Fame Lady Society Identity Contract
@@ -23,6 +24,22 @@ contract FLSNaming is ERC721, OwnableRoles {
 
     /// @notice Maximum time a commitment is valid (24 hours)
     uint256 public constant MAX_COMMIT_AGE = 24 hours;
+
+    // ============ EIP-712 Constants ============
+
+    /// @notice EIP-712 domain type hash
+    bytes32 private constant DOMAIN_TYPEHASH =
+        keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
+
+    /// @notice EIP-712 type hash for AddVerifiedAddress
+    bytes32 private constant ADD_VERIFIED_ADDRESS_TYPEHASH =
+        keccak256("AddVerifiedAddress(uint256 tokenId,address addr,uint256 nonce)");
+
+    /// @notice Cached domain separator (set in constructor)
+    bytes32 private immutable _CACHED_DOMAIN_SEPARATOR;
+
+    /// @notice Cached chain ID for domain separator
+    uint256 private immutable _CACHED_CHAIN_ID;
 
     // ============ Storage ============
 
@@ -83,6 +100,9 @@ contract FLSNaming is ERC721, OwnableRoles {
     /// @notice Gate NFT token ID to identity token ID (for reverse lookup)
     mapping(uint256 => uint256) public gateTokenIdToIdentityTokenId;
 
+    /// @notice Nonces for EIP-712 signatures (per address)
+    mapping(address => uint256) public nonces;
+
     // ============ Errors ============
 
     error NotNFTHolder();
@@ -99,9 +119,11 @@ contract FLSNaming is ERC721, OwnableRoles {
     error CommitmentTooNew();
     error CommitmentExpired();
     error CommitmentAlreadyUsed();
+    error AlreadyHasIdentity();
     error InvalidPrimaryTokenId();
     error GateTokenAlreadyUsed();
     error InvalidAddress();
+    error InvalidSignature();
 
     // ============ Events ============
 
@@ -140,6 +162,9 @@ contract FLSNaming is ERC721, OwnableRoles {
         _initializeOwner(msg.sender);
         gateNft = IERC721(_gateNft);
         _nextTokenId = 1;
+
+        _CACHED_CHAIN_ID = block.chainid;
+        _CACHED_DOMAIN_SEPARATOR = _buildDomainSeparator();
     }
 
     // ============ Commit-Reveal Functions ============
@@ -153,9 +178,22 @@ contract FLSNaming is ERC721, OwnableRoles {
         return keccak256(abi.encodePacked(_name, _salt, _owner));
     }
 
+    /// @notice Require the name is not claimed and the primary token ID is valid and not already used
+    /// @param _name The name to claim
+    /// @param _primaryTokenId The gate NFT token ID to bind to this identity
+    function checkNameNotClaimed(string calldata _name, uint256 _primaryTokenId) public view returns (bytes32 nameHash) {
+      if (bytes(_name).length == 0) revert EmptyName();
+        if (balanceOf(msg.sender) > 0) revert AlreadyHasIdentity();
+        if (gateNft.ownerOf(_primaryTokenId) != msg.sender) revert InvalidPrimaryTokenId();
+        if (gateTokenIdToIdentityTokenId[_primaryTokenId] != 0) revert GateTokenAlreadyUsed();
+
+        nameHash = keccak256(bytes(_name));
+        if (nameHashToTokenId[nameHash] != 0) revert NameAlreadyClaimed();
+    }
+
     /// @notice Commit to claiming a name (step 1 of commit-reveal)
     /// @param commitment The commitment hash from makeCommitment
-    function commitName(bytes32 commitment) external {
+    function commitName(bytes32 commitment) external  {
         if (commitments[commitment].timestamp != 0) revert CommitmentAlreadyUsed();
         commitments[commitment] = Commitment(block.timestamp, false);
         emit NameCommitted(msg.sender, commitment);
@@ -166,13 +204,7 @@ contract FLSNaming is ERC721, OwnableRoles {
     /// @param _salt The salt used in the commitment
     /// @param _primaryTokenId The gate NFT token ID to bind to this identity
     function claimName(string calldata _name, bytes32 _salt, uint256 _primaryTokenId) external {
-        if (bytes(_name).length == 0) revert EmptyName();
-        if (gateNft.ownerOf(_primaryTokenId) != msg.sender) revert InvalidPrimaryTokenId();
-        if (gateTokenIdToIdentityTokenId[_primaryTokenId] != 0) revert GateTokenAlreadyUsed();
-
-        bytes32 nameHash = keccak256(bytes(_name));
-        if (nameHashToTokenId[nameHash] != 0) revert NameAlreadyClaimed();
-
+        bytes32 nameHash = checkNameNotClaimed(_name, _primaryTokenId);
         bytes32 commitment = keccak256(abi.encodePacked(_name, _salt, msg.sender));
         Commitment storage c = commitments[commitment];
         
@@ -198,12 +230,21 @@ contract FLSNaming is ERC721, OwnableRoles {
 
     // ============ Verified Address Functions ============
 
-    /// @notice Add a verified address to an identity
+    /// @notice Add a verified address to an identity with EIP-712 signature verification
     /// @param addr The address to add
-    function addVerifiedAddress(address addr) external {
+    /// @param signature The EIP-712 signature from addr authorizing the link
+    /// @dev The signature must be over AddVerifiedAddress(tokenId, addr, nonce)
+    function addVerifiedAddress(address addr, bytes calldata signature) external {
         if (addr == address(0)) revert InvalidAddress();
         uint256 tokenId = _requirePrimaryAndOwnsToken();
         if (addressToTokenId[addr] != 0) revert AddressAlreadyLinked();
+
+        uint256 nonce = nonces[addr]++;
+        bytes32 structHash = keccak256(abi.encode(ADD_VERIFIED_ADDRESS_TYPEHASH, tokenId, addr, nonce));
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR(), structHash));
+
+        address signer = ECDSA.recover(digest, signature);
+        if (signer != addr) revert InvalidSignature();
 
         _verifiedAddresses[tokenId].push(addr);
         _isVerified[tokenId][addr] = true;
@@ -450,6 +491,28 @@ contract FLSNaming is ERC721, OwnableRoles {
         return (c.timestamp, c.used);
     }
 
+    // ============ EIP-712 View Functions ============
+
+    /// @notice Get the EIP-712 domain separator
+    /// @return The domain separator
+    function DOMAIN_SEPARATOR() public view returns (bytes32) {
+        if (block.chainid == _CACHED_CHAIN_ID) {
+            return _CACHED_DOMAIN_SEPARATOR;
+        }
+        return _buildDomainSeparator();
+    }
+
+    /// @notice Build the EIP-712 digest for adding a verified address
+    /// @dev Used by front-ends to construct the message for signing
+    /// @param tokenId The identity token ID
+    /// @param addr The address to be added
+    /// @param nonce The current nonce for addr (use nonces(addr) to get current value)
+    /// @return The digest to be signed
+    function buildAddVerifiedAddressDigest(uint256 tokenId, address addr, uint256 nonce) external view returns (bytes32) {
+        bytes32 structHash = keccak256(abi.encode(ADD_VERIFIED_ADDRESS_TYPEHASH, tokenId, addr, nonce));
+        return keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR(), structHash));
+    }
+
     // ============ ERC721 Overrides ============
 
     /// @notice Get token URI
@@ -476,6 +539,19 @@ contract FLSNaming is ERC721, OwnableRoles {
     }
 
     // ============ Internal Functions ============
+
+    /// @dev Build the EIP-712 domain separator
+    function _buildDomainSeparator() internal view returns (bytes32) {
+        return keccak256(
+            abi.encode(
+                DOMAIN_TYPEHASH,
+                keccak256(bytes("FLS Identity")),
+                keccak256(bytes("1")),
+                block.chainid,
+                address(this)
+            )
+        );
+    }
 
     /// @dev Require caller is primary and primaryTokenId is owned by a verified address
     function _requirePrimaryAndOwnsToken() internal view returns (uint256 tokenId) {

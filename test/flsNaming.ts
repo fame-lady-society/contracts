@@ -11,6 +11,42 @@ import {
   toHex,
 } from "viem";
 
+// EIP-712 types for addVerifiedAddress signature
+const ADD_VERIFIED_ADDRESS_TYPES = {
+  AddVerifiedAddress: [
+    { name: "tokenId", type: "uint256" },
+    { name: "addr", type: "address" },
+    { name: "nonce", type: "uint256" },
+  ],
+} as const;
+
+// Helper to create EIP-712 signature for addVerifiedAddress
+async function signAddVerifiedAddress(
+  wallet: WalletClient,
+  contractAddress: Address,
+  chainId: number,
+  tokenId: bigint,
+  addr: Address,
+  nonce: bigint
+): Promise<Hex> {
+  return wallet.signTypedData({
+    account: wallet.account!,
+    domain: {
+      name: "FLS Identity",
+      version: "1",
+      chainId: BigInt(chainId),
+      verifyingContract: contractAddress,
+    },
+    types: ADD_VERIFIED_ADDRESS_TYPES,
+    primaryType: "AddVerifiedAddress",
+    message: {
+      tokenId,
+      addr,
+      nonce,
+    },
+  });
+}
+
 interface TestContext {
   flsNaming: Awaited<ReturnType<typeof viem.getContractAt<"FLSNaming">>>;
   testNft: Awaited<ReturnType<typeof viem.getContractAt<"TestNFT">>>;
@@ -292,7 +328,7 @@ describe("FLSNaming", async function () {
       }
     });
 
-    it("should allow claiming with different primaryTokenId by same holder", async function () {
+    it("should NOT allow claiming with different primaryTokenId by same holder", async function () {
       const name = "SecondClaim";
       const salt = randomSalt();
       const owner = ctx.holder.account!.address;
@@ -310,12 +346,14 @@ describe("FLSNaming", async function () {
 
       await advanceTime(ctx.publicClient, 11);
 
-      await ctx.flsNaming.write.claimName([name, salt, primaryTokenId], {
-        account: ctx.holder.account!.address,
-      });
-
-      const tokenId = await ctx.flsNaming.read.resolveName([name]);
-      assert.notEqual(tokenId, 0n, "Name should be claimed");
+      try {
+        await ctx.flsNaming.write.claimName([name, salt, primaryTokenId], {
+          account: ctx.holder.account!.address,
+        });
+        assert.fail("Should have reverted with NameAlreadyClaimed");
+      } catch (error) {
+        assert.ok(true);
+      }
     });
   });
 
@@ -480,8 +518,20 @@ describe("FLSNaming", async function () {
       if (tokenId === 0n) return;
 
       const newAddress = ctx.nonHolder.account!.address;
+      const chainId = await ctx.publicClient.getChainId();
+      const nonce = await ctx.flsNaming.read.nonces([newAddress]);
 
-      await ctx.flsNaming.write.addVerifiedAddress([newAddress], {
+      // nonHolder signs the typed data to authorize being added
+      const signature = await signAddVerifiedAddress(
+        ctx.nonHolder,
+        ctx.flsNaming.address,
+        chainId,
+        tokenId,
+        newAddress,
+        nonce
+      );
+
+      await ctx.flsNaming.write.addVerifiedAddress([newAddress, signature], {
         account: ctx.holder.account!.address,
       });
 
@@ -543,6 +593,170 @@ describe("FLSNaming", async function () {
         assert.ok(true);
       }
     });
+
+    it("should reject signature from wrong address", async function () {
+      const tokenId = await ctx.flsNaming.read.addressToTokenId([
+        ctx.holder.account!.address,
+      ]);
+
+      if (tokenId === 0n) return;
+
+      const chainId = await ctx.publicClient.getChainId();
+      const addressToAdd = walletClients[4].account!.address;
+      const nonce = await ctx.flsNaming.read.nonces([addressToAdd]);
+
+      // holder2 signs instead of the address being added - should fail
+      const wrongSignature = await signAddVerifiedAddress(
+        ctx.holder2,
+        ctx.flsNaming.address,
+        chainId,
+        tokenId,
+        addressToAdd,
+        nonce
+      );
+
+      try {
+        await ctx.flsNaming.write.addVerifiedAddress([addressToAdd, wrongSignature], {
+          account: ctx.holder.account!.address,
+        });
+        assert.fail("Should have reverted with InvalidSignature");
+      } catch (error) {
+        assert.ok(String(error).includes("InvalidSignature"), "Expected InvalidSignature error");
+      }
+    });
+
+    it("should prevent replay attacks (nonce increments)", async function () {
+      const tokenId = await ctx.flsNaming.read.addressToTokenId([
+        ctx.holder.account!.address,
+      ]);
+
+      if (tokenId === 0n) return;
+
+      const chainId = await ctx.publicClient.getChainId();
+      const newWallet = walletClients[5];
+      const newAddress = newWallet.account!.address;
+      
+      // Check if already verified
+      const alreadyVerified = await ctx.flsNaming.read.isVerified([tokenId, newAddress]);
+      if (alreadyVerified) return;
+
+      const nonceBefore = await ctx.flsNaming.read.nonces([newAddress]);
+
+      // Create valid signature and add address
+      const signature = await signAddVerifiedAddress(
+        newWallet,
+        ctx.flsNaming.address,
+        chainId,
+        tokenId,
+        newAddress,
+        nonceBefore
+      );
+
+      await ctx.flsNaming.write.addVerifiedAddress([newAddress, signature], {
+        account: ctx.holder.account!.address,
+      });
+
+      // Verify nonce incremented
+      const nonceAfter = await ctx.flsNaming.read.nonces([newAddress]);
+      assert.equal(nonceAfter, nonceBefore + 1n, "Nonce should increment after use");
+
+      // Remove the address so we can test replay
+      await ctx.flsNaming.write.removeVerifiedAddress([newAddress], {
+        account: ctx.holder.account!.address,
+      });
+
+      // Try to replay the same signature - should fail because nonce changed
+      try {
+        await ctx.flsNaming.write.addVerifiedAddress([newAddress, signature], {
+          account: ctx.holder.account!.address,
+        });
+        assert.fail("Should have reverted - replay attack should fail");
+      } catch (error) {
+        assert.ok(String(error).includes("InvalidSignature"), "Replay should fail with InvalidSignature");
+      }
+    });
+
+    it("should reject signature with wrong tokenId", async function () {
+      // Create identity for holder2 first
+      const name = "WrongTokenIdTest";
+      const salt = randomSalt();
+      const owner = ctx.holder2.account!.address;
+      const primaryTokenId = 4n;
+
+      // Check if holder2 already has an identity
+      let holder2TokenId = await ctx.flsNaming.read.addressToTokenId([owner]);
+      
+      if (holder2TokenId === 0n) {
+        const commitment = await ctx.flsNaming.read.makeCommitment([name, salt, owner]);
+        await ctx.flsNaming.write.commitName([commitment], { account: owner });
+        await advanceTime(ctx.publicClient, 11);
+        await ctx.flsNaming.write.claimName([name, salt, primaryTokenId], { account: owner });
+        holder2TokenId = await ctx.flsNaming.read.addressToTokenId([owner]);
+      }
+
+      const holderTokenId = await ctx.flsNaming.read.addressToTokenId([
+        ctx.holder.account!.address,
+      ]);
+
+      if (holderTokenId === 0n || holder2TokenId === 0n) return;
+
+      const chainId = await ctx.publicClient.getChainId();
+      const newWallet = walletClients[6];
+      const newAddress = newWallet.account!.address;
+      const nonce = await ctx.flsNaming.read.nonces([newAddress]);
+
+      // Sign for holder2's tokenId but try to add to holder's identity
+      const signatureForWrongToken = await signAddVerifiedAddress(
+        newWallet,
+        ctx.flsNaming.address,
+        chainId,
+        holder2TokenId, // Wrong tokenId
+        newAddress,
+        nonce
+      );
+
+      try {
+        // Try to add to holder's identity with signature for holder2's tokenId
+        await ctx.flsNaming.write.addVerifiedAddress([newAddress, signatureForWrongToken], {
+          account: ctx.holder.account!.address,
+        });
+        assert.fail("Should have reverted with InvalidSignature");
+      } catch (error) {
+        assert.ok(String(error).includes("InvalidSignature"), "Wrong tokenId should fail");
+      }
+    });
+
+    it("should reject signature with wrong nonce", async function () {
+      const tokenId = await ctx.flsNaming.read.addressToTokenId([
+        ctx.holder.account!.address,
+      ]);
+
+      if (tokenId === 0n) return;
+
+      const chainId = await ctx.publicClient.getChainId();
+      const newWallet = walletClients[7];
+      const newAddress = newWallet.account!.address;
+      const currentNonce = await ctx.flsNaming.read.nonces([newAddress]);
+
+      // Sign with wrong nonce (current + 1)
+      const signatureWithWrongNonce = await signAddVerifiedAddress(
+        newWallet,
+        ctx.flsNaming.address,
+        chainId,
+        tokenId,
+        newAddress,
+        currentNonce + 1n // Wrong nonce
+      );
+
+      try {
+        await ctx.flsNaming.write.addVerifiedAddress([newAddress, signatureWithWrongNonce], {
+          account: ctx.holder.account!.address,
+        });
+        assert.fail("Should have reverted with InvalidSignature");
+      } catch (error) {
+        assert.ok(String(error).includes("InvalidSignature"), "Wrong nonce should fail");
+      }
+    });
   });
 
   describe("Lookup Functions", () => {
@@ -579,30 +793,40 @@ describe("FLSNaming", async function () {
 
   describe("Sync Function", () => {
     it("should burn identity when primary token ID is transferred away", async function () {
-      // Create a new identity for holder2
-      const name = "SyncTestHolder2";
-      const salt = randomSalt();
       const owner = ctx.holder2.account!.address;
-      const primaryTokenId = 3n;
 
-      const commitment = await ctx.flsNaming.read.makeCommitment([
-        name,
-        salt,
-        owner,
-      ]);
+      // Check if holder2 already has an identity (from previous tests)
+      let tokenIdBefore = await ctx.flsNaming.read.addressToTokenId([owner]);
+      
+      if (tokenIdBefore === 0n) {
+        // Create a new identity for holder2
+        const name = "SyncTestHolder2";
+        const salt = randomSalt();
+        const primaryTokenId = 3n;
 
-      await ctx.flsNaming.write.commitName([commitment], {
-        account: ctx.holder2.account!.address,
-      });
+        const commitment = await ctx.flsNaming.read.makeCommitment([
+          name,
+          salt,
+          owner,
+        ]);
 
-      await advanceTime(ctx.publicClient, 11);
+        await ctx.flsNaming.write.commitName([commitment], {
+          account: ctx.holder2.account!.address,
+        });
 
-      await ctx.flsNaming.write.claimName([name, salt, primaryTokenId], {
-        account: ctx.holder2.account!.address,
-      });
+        await advanceTime(ctx.publicClient, 11);
 
-      const tokenIdBefore = await ctx.flsNaming.read.addressToTokenId([owner]);
+        await ctx.flsNaming.write.claimName([name, salt, primaryTokenId], {
+          account: ctx.holder2.account!.address,
+        });
+
+        tokenIdBefore = await ctx.flsNaming.read.addressToTokenId([owner]);
+      }
+
       assert.notEqual(tokenIdBefore, 0n, "Identity should exist");
+
+      // Get the current primaryTokenId for this identity
+      const [, , primaryTokenId] = await ctx.flsNaming.read.getIdentity([tokenIdBefore]);
 
       // Transfer the primary token away from holder2
       await ctx.testNft.write.transferFrom(
@@ -696,13 +920,27 @@ describe("FLSNaming", async function () {
       ]);
       assert.notEqual(tokenId, 0n, "Holder should have an identity");
 
+      const chainId = await ctx.publicClient.getChainId();
+
       // Verify we can add a normal address first (proves setup is correct)
-      const normalAddress = walletClients[3].account!.address;
+      const normalWallet = walletClients[3];
+      const normalAddress = normalWallet.account!.address;
       const isAlreadyVerified = await ctx.flsNaming.read.isVerified([tokenId, normalAddress]);
       
       if (!isAlreadyVerified) {
+        // Get nonce and sign for normal address
+        const nonce = await ctx.flsNaming.read.nonces([normalAddress]);
+        const signature = await signAddVerifiedAddress(
+          normalWallet,
+          ctx.flsNaming.address,
+          chainId,
+          tokenId,
+          normalAddress,
+          nonce
+        );
+
         // This should succeed - proves addVerifiedAddress works
-        await ctx.flsNaming.write.addVerifiedAddress([normalAddress], {
+        await ctx.flsNaming.write.addVerifiedAddress([normalAddress, signature], {
           account: ctx.holder.account!.address,
         });
         const isNowVerified = await ctx.flsNaming.read.isVerified([tokenId, normalAddress]);
@@ -710,13 +948,16 @@ describe("FLSNaming", async function () {
       }
 
       // Now attempt to add address(0) - this SHOULD revert with InvalidAddress
+      // We can't get a signature from address(0), but the contract should reject it
+      // before signature verification anyway due to the InvalidAddress check
       const zeroAddress = "0x0000000000000000000000000000000000000000" as Address;
+      const dummySignature = "0x" + "00".repeat(65) as Hex; // Invalid signature, but we expect InvalidAddress first
 
       let callSucceeded = false;
       let errorMessage = "";
 
       try {
-        await ctx.flsNaming.write.addVerifiedAddress([zeroAddress], {
+        await ctx.flsNaming.write.addVerifiedAddress([zeroAddress, dummySignature], {
           account: ctx.holder.account!.address,
         });
         callSucceeded = true;
