@@ -14,7 +14,7 @@ const FLSNamingTestModule = buildModule("FLSNamingTestModule", (m) => {
   // ]);
   const flsNamingTest = m.contract("FLSNaming", [gateNft]);
 
-  return { flsNamingTest, gateNft };
+  return { flsNamingTest };
 });
 
 export default FLSNamingTestModule;

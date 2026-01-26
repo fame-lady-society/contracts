@@ -4,7 +4,7 @@ pragma solidity ^0.8.24;
 import {ERC721} from "solmate/src/tokens/ERC721.sol";
 import {OwnableRoles} from "solady/src/auth/OwnableRoles.sol";
 import {LibString} from "solady/src/utils/LibString.sol";
-import {ECDSA} from "solady/src/utils/ECDSA.sol";
+import {SignatureCheckerLib} from "solady/src/utils/SignatureCheckerLib.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 
 /// @title FLSNaming - Fame Lady Society Identity Contract
@@ -243,8 +243,9 @@ contract FLSNaming is ERC721, OwnableRoles {
         bytes32 structHash = keccak256(abi.encode(ADD_VERIFIED_ADDRESS_TYPEHASH, tokenId, addr, nonce));
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR(), structHash));
 
-        address signer = ECDSA.recover(digest, signature);
-        if (signer != addr) revert InvalidSignature();
+        if (!SignatureCheckerLib.isValidSignatureNowCalldata(addr, digest, signature)) {
+            revert InvalidSignature();
+        }
 
         _verifiedAddresses[tokenId].push(addr);
         _isVerified[tokenId][addr] = true;
