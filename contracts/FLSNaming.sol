@@ -83,7 +83,7 @@ contract FLSNaming is ERC721, OwnableRoles {
     mapping(uint256 => bytes32[]) private _metadataKeys;
 
     /// @notice Identity token ID to metadata key to value
-    mapping(uint256 => mapping(bytes32 => string)) private _metadata;
+    mapping(uint256 => mapping(bytes32 => bytes)) private _metadata;
 
     /// @notice Identity token ID to metadata key to existence flag
     mapping(uint256 => mapping(bytes32 => bool)) private _metadataExists;
@@ -124,6 +124,7 @@ contract FLSNaming is ERC721, OwnableRoles {
     error GateTokenAlreadyUsed();
     error InvalidAddress();
     error InvalidSignature();
+    error InvalidMetadataBatch();
 
     // ============ Events ============
 
@@ -327,7 +328,7 @@ contract FLSNaming is ERC721, OwnableRoles {
     /// @notice Set a metadata key/value pair
     /// @param key The metadata key (typically keccak256 of a string like "twitter")
     /// @param value The metadata value
-    function setMetadata(bytes32 key, string calldata value) external {
+    function setMetadata(bytes32 key, bytes calldata value) external {
         uint256 tokenId = _requirePrimaryAndOwnsToken();
 
         if (!_metadataExists[tokenId][key]) {
@@ -336,6 +337,28 @@ contract FLSNaming is ERC721, OwnableRoles {
         }
         _metadata[tokenId][key] = value;
         emit MetadataUpdated(tokenId, key);
+    }
+
+    /// @notice Set multiple metadata key/value pairs
+    /// @param keys The metadata keys
+    /// @param values The metadata values
+    function setMetadataBatch(bytes32[] calldata keys, bytes[] calldata values) external {
+        uint256 tokenId = _requirePrimaryAndOwnsToken();
+        uint256 len = keys.length;
+        if (len != values.length) revert InvalidMetadataBatch();
+
+        for (uint256 i; i < len;) {
+            bytes32 key = keys[i];
+            if (!_metadataExists[tokenId][key]) {
+                _metadataKeys[tokenId].push(key);
+                _metadataExists[tokenId][key] = true;
+            }
+            _metadata[tokenId][key] = values[i];
+            emit MetadataUpdated(tokenId, key);
+            unchecked {
+                ++i;
+            }
+        }
     }
 
     /// @notice Delete a metadata key
@@ -439,7 +462,7 @@ contract FLSNaming is ERC721, OwnableRoles {
     /// @param tokenId The identity token ID
     /// @param key The metadata key
     /// @return The metadata value
-    function getMetadata(uint256 tokenId, bytes32 key) external view returns (string memory) {
+    function getMetadata(uint256 tokenId, bytes32 key) external view returns (bytes memory) {
         return _metadata[tokenId][key];
     }
 

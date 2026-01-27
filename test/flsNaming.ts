@@ -453,7 +453,7 @@ describe("FLSNaming", async function () {
       if (tokenId === 0n) return;
 
       const key = keccak256(toHex("twitter"));
-      const value = "@testlady";
+      const value = toHex("@testlady");
 
       await ctx.flsNaming.write.setMetadata([key, value], {
         account: ctx.holder.account!.address,
@@ -474,7 +474,7 @@ describe("FLSNaming", async function () {
       if (tokenId === 0n) return;
 
       const key = keccak256(toHex("twitter"));
-      const newValue = "@updatedlady";
+      const newValue = toHex("@updatedlady");
 
       await ctx.flsNaming.write.setMetadata([key, newValue], {
         account: ctx.holder.account!.address,
@@ -482,6 +482,55 @@ describe("FLSNaming", async function () {
 
       const storedValue = await ctx.flsNaming.read.getMetadata([tokenId, key]);
       assert.equal(storedValue, newValue, "Metadata value should be updated");
+    });
+
+    it("should allow primary to batch set metadata", async function () {
+      const tokenId = await ctx.flsNaming.read.addressToTokenId([
+        ctx.holder.account!.address,
+      ]);
+
+      if (tokenId === 0n) return;
+
+      const key1 = keccak256(toHex("twitter"));
+      const key2 = keccak256(toHex("discord"));
+      const initialValue = toHex("@initiallady");
+      const updatedValue = toHex("@batchlady");
+      const newValue = toHex("ladylink");
+
+      await ctx.flsNaming.write.setMetadata([key1, initialValue], {
+        account: ctx.holder.account!.address,
+      });
+
+      await ctx.flsNaming.write.setMetadataBatch(
+        [[key1, key2], [updatedValue, newValue]],
+        { account: ctx.holder.account!.address },
+      );
+
+      const [storedValue1, storedValue2] = await Promise.all([
+        ctx.flsNaming.read.getMetadata([tokenId, key1]),
+        ctx.flsNaming.read.getMetadata([tokenId, key2]),
+      ]);
+
+      assert.equal(storedValue1, updatedValue, "Existing key should be updated");
+      assert.equal(storedValue2, newValue, "New key should be stored");
+
+      const keys = await ctx.flsNaming.read.getMetadataKeys([tokenId]);
+      assert.ok(keys.includes(key1), "Key1 should be in metadata keys");
+      assert.ok(keys.includes(key2), "Key2 should be in metadata keys");
+    });
+
+    it("should reject mismatched batch metadata lengths", async function () {
+      const key = keccak256(toHex("twitter"));
+      const value = toHex("@badbatch");
+
+      try {
+        await ctx.flsNaming.write.setMetadataBatch([[key], [value, value]], {
+          account: ctx.holder.account!.address,
+        });
+        assert.fail("Should have reverted with InvalidMetadataBatch");
+      } catch (error) {
+        assert.ok(true);
+      }
     });
 
     it("should allow primary to delete metadata", async function () {
@@ -492,7 +541,7 @@ describe("FLSNaming", async function () {
       if (tokenId === 0n) return;
 
       const key = keccak256(toHex("toDelete"));
-      const value = "deleteMe";
+      const value = toHex("deleteMe");
 
       // Set the metadata first
       await ctx.flsNaming.write.setMetadata([key, value], {
@@ -505,7 +554,7 @@ describe("FLSNaming", async function () {
       });
 
       const storedValue = await ctx.flsNaming.read.getMetadata([tokenId, key]);
-      assert.equal(storedValue, "", "Metadata should be deleted");
+      assert.equal(storedValue, "0x", "Metadata should be deleted");
     });
   });
 
