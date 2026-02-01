@@ -25,6 +25,9 @@ contract FLSNaming is ERC721, OwnableRoles {
     /// @notice Maximum time a commitment is valid (24 hours)
     uint256 public constant MAX_COMMIT_AGE = 24 hours;
 
+    /// @notice Maximum length for a name (in bytes)
+    uint256 public constant MAX_NAME_LENGTH = 64;
+
     // ============ EIP-712 Constants ============
 
     /// @notice EIP-712 domain type hash
@@ -54,10 +57,11 @@ contract FLSNaming is ERC721, OwnableRoles {
     }
 
     /// @notice Commitment data for commit-reveal claiming
-    /// @param timestamp When the commitment was made
+    /// @dev Packed into single storage slot: uint248 (31 bytes) + bool (1 byte) = 32 bytes
+    /// @param timestamp When the commitment was made (max ~14 quintillion years, effectively unlimited)
     /// @param used Whether the commitment has been used
     struct Commitment {
-        uint256 timestamp;
+        uint248 timestamp;
         bool used;
     }
 
@@ -115,6 +119,7 @@ contract FLSNaming is ERC721, OwnableRoles {
     error IdentityNotFound();
     error AddressAlreadyLinked();
     error EmptyName();
+    error NameTooLong();
     error CommitmentNotFound();
     error CommitmentTooNew();
     error CommitmentExpired();
@@ -183,7 +188,9 @@ contract FLSNaming is ERC721, OwnableRoles {
     /// @param _name The name to claim
     /// @param _primaryTokenId The gate NFT token ID to bind to this identity
     function checkNameNotClaimed(string calldata _name, uint256 _primaryTokenId) public view returns (bytes32 nameHash) {
-      if (bytes(_name).length == 0) revert EmptyName();
+        uint256 nameLen = bytes(_name).length;
+        if (nameLen == 0) revert EmptyName();
+        if (nameLen > MAX_NAME_LENGTH) revert NameTooLong();
         if (balanceOf(msg.sender) > 0) revert AlreadyHasIdentity();
         if (gateNft.ownerOf(_primaryTokenId) != msg.sender) revert InvalidPrimaryTokenId();
         if (gateTokenIdToIdentityTokenId[_primaryTokenId] != 0) revert GateTokenAlreadyUsed();
@@ -194,9 +201,9 @@ contract FLSNaming is ERC721, OwnableRoles {
 
     /// @notice Commit to claiming a name (step 1 of commit-reveal)
     /// @param commitment The commitment hash from makeCommitment
-    function commitName(bytes32 commitment) external  {
+    function commitName(bytes32 commitment) external {
         if (commitments[commitment].timestamp != 0) revert CommitmentAlreadyUsed();
-        commitments[commitment] = Commitment(block.timestamp, false);
+        commitments[commitment] = Commitment(uint248(block.timestamp), false);
         emit NameCommitted(msg.sender, commitment);
     }
 
@@ -287,7 +294,11 @@ contract FLSNaming is ERC721, OwnableRoles {
         address oldPrimary = identity.primaryAddress;
         identity.primaryAddress = newPrimary;
 
-        // Internal transfer of soulbound NFT to new primary
+        // SAFETY: Direct storage manipulation required for soulbound primary transfer.
+        // This bypasses transferFrom (which reverts for soulbound tokens) while maintaining
+        // correct ERC721 balance/ownership state. Verified against solmate ERC721 v6.x.
+        // The unchecked block is safe: oldPrimary balance >= 1 (owns this token),
+        // newPrimary balance won't overflow (uint256 max is unreachable).
         unchecked {
             _balanceOf[oldPrimary]--;
             _balanceOf[newPrimary]++;
@@ -376,7 +387,11 @@ contract FLSNaming is ERC721, OwnableRoles {
     // ============ Sync Function ============
 
     /// @notice Sync an identity - burns it if primaryTokenId is no longer owned by a verified address
-    /// @dev Anyone can call this function to clean up stale identities
+    /// @dev Anyone can call this function to clean up stale identities.
+    ///      WARNING: If a user sells/transfers their gateNFT without first calling setPrimaryTokenId
+    ///      to bind to a different token owned by a verified address, anyone can call sync() to
+    ///      immediately burn their identity. Users should update primaryTokenId BEFORE transferring
+    ///      their bound gateNFT, or ensure a verified address retains ownership.
     /// @param target The primary address to check
     function sync(address target) external {
         uint256 tokenId = addressToTokenId[target];
@@ -384,12 +399,13 @@ contract FLSNaming is ERC721, OwnableRoles {
 
         Identity storage identity = identities[tokenId];
         if (identity.primaryAddress != target) return;
-        
-        address tokenOwner = gateNft.ownerOf(identity.primaryTokenId);
+
+        uint256 primaryTokenId = identity.primaryTokenId;
+        address tokenOwner = gateNft.ownerOf(primaryTokenId);
         if (_isVerified[tokenId][tokenOwner]) return;
 
         address oldPrimary = identity.primaryAddress;
-        gateTokenIdToIdentityTokenId[identity.primaryTokenId] = 0;
+        gateTokenIdToIdentityTokenId[primaryTokenId] = 0;
 
         address[] storage verified = _verifiedAddresses[tokenId];
         uint256 len = verified.length;
@@ -473,11 +489,32 @@ contract FLSNaming is ERC721, OwnableRoles {
         return _metadataKeys[tokenId];
     }
 
+    /// @notice Compute the hash of a name (for verification or lookup)
+    /// @dev External systems can use this to verify they're using the same hashing method
+    /// @param _name The name to hash
+    /// @return The keccak256 hash of the name bytes
+    function hashName(string calldata _name) external pure returns (bytes32) {
+        return keccak256(bytes(_name));
+    }
+
     /// @notice Resolve a name to an identity token ID
     /// @param _name The name to resolve
     /// @return The identity token ID (0 if not found)
     function resolveName(string calldata _name) external view returns (uint256) {
         return nameHashToTokenId[keccak256(bytes(_name))];
+    }
+
+    /// @notice Resolve a name hash directly to identity data
+    /// @dev Useful for external systems that have pre-computed normalized hashes
+    /// @param nameHash The keccak256 hash of the name
+    /// @return name The stored name string (empty if not found)
+    /// @return primaryAddress The primary address (address(0) if not found)
+    /// @return primaryTokenId The bound gate NFT token ID (0 if not found)
+    function resolveByNameHash(bytes32 nameHash) external view returns (string memory name, address primaryAddress, uint256 primaryTokenId) {
+        uint256 tokenId = nameHashToTokenId[nameHash];
+        if (tokenId == 0) return ("", address(0), 0);
+        Identity storage i = identities[tokenId];
+        return (i.name, i.primaryAddress, i.primaryTokenId);
     }
 
     /// @notice Resolve a name directly to its primary address
@@ -559,6 +596,16 @@ contract FLSNaming is ERC721, OwnableRoles {
 
     /// @notice Safe transfer with data is disabled for soulbound tokens
     function safeTransferFrom(address, address, uint256, bytes calldata) public pure override {
+        revert TransferDisabled();
+    }
+
+    /// @notice Approval is disabled for soulbound tokens
+    function approve(address, uint256) public pure override {
+        revert TransferDisabled();
+    }
+
+    /// @notice Approval for all is disabled for soulbound tokens
+    function setApprovalForAll(address, bool) public pure override {
         revert TransferDisabled();
     }
 
