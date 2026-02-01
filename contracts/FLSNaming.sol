@@ -6,18 +6,26 @@ import {OwnableRoles} from "solady/src/auth/OwnableRoles.sol";
 import {LibString} from "solady/src/utils/LibString.sol";
 import {SignatureCheckerLib} from "solady/src/utils/SignatureCheckerLib.sol";
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import {IERC4906} from "./IERC4906.sol";
+import {ITokenURIGenerator} from "./ITokenURIGenerator.sol";
 
 /// @title FLSNaming - Fame Lady Society Identity Contract
 /// @notice A naming and identity system for NFT holders using commit-reveal claiming
 /// @dev Creates soulbound NFTs with key/value metadata and verified address management.
 ///      Each identity is bound to a specific gate NFT token (primaryTokenId).
-contract FLSNaming is ERC721, OwnableRoles {
+contract FLSNaming is ERC721, OwnableRoles, IERC4906 {
     using LibString for uint256;
 
     // ============ Constants ============
 
     /// @notice Role for updating metadata URI
     uint256 internal constant METADATA_ADMIN = 1 << 0;
+
+    /// @notice Role for updating metadata renderer and base URI
+    uint256 internal constant METADATA_UPDATER = 1 << 1;
+
+    /// @notice Role for emitting metadata update events
+    uint256 internal constant MEADATA = 1 << 2;
 
     /// @notice Minimum wait time between commit and reveal (10 seconds)
     uint256 public constant MIN_COMMIT_AGE = 10 seconds;
@@ -70,6 +78,9 @@ contract FLSNaming is ERC721, OwnableRoles {
 
     /// @notice Base URI for token metadata
     string public baseTokenURI;
+
+    /// @notice Optional token URI renderer
+    ITokenURIGenerator public renderer;
 
     /// @notice Next token ID to mint
     uint256 private _nextTokenId;
@@ -436,14 +447,42 @@ contract FLSNaming is ERC721, OwnableRoles {
 
     /// @notice Update the base token URI
     /// @param uri The new base URI
-    function setBaseTokenURI(string calldata uri) external onlyOwnerOrRoles(METADATA_ADMIN) {
+    function setBaseTokenURI(string calldata uri) external onlyOwnerOrRoles(METADATA_ADMIN | METADATA_UPDATER) {
         baseTokenURI = uri;
+    }
+
+    /// @notice Update the token renderer
+    /// @param newRenderer The new renderer contract (set to address(0) to use baseTokenURI)
+    function setRenderer(address newRenderer) external onlyOwnerOrRoles(METADATA_ADMIN | METADATA_UPDATER) {
+        address previousRenderer = address(renderer);
+        if (previousRenderer != address(0)) {
+            _removeRoles(previousRenderer, MEADATA);
+        }
+        renderer = ITokenURIGenerator(newRenderer);
+        if (newRenderer != address(0)) {
+            _grantRoles(newRenderer, MEADATA);
+        }
+        if (_nextTokenId > 1) {
+            emit BatchMetadataUpdate(1, _nextTokenId - 1);
+        }
+    }
+
+    /// @notice Emit a metadata update event for a token
+    /// @param tokenId The identity token ID
+    function emitMetadataUpdate(uint256 tokenId) external onlyOwnerOrRoles(MEADATA) {
+        emit MetadataUpdate(tokenId);
     }
 
     // ============ View Functions ============
 
     /// @notice Get the metadata admin role constant
     function roleMetadataAdmin() external pure returns (uint256) { return METADATA_ADMIN; }
+
+    /// @notice Get the metadata updater role constant
+    function roleMetadataUpdater() external pure returns (uint256) { return METADATA_UPDATER; }
+
+    /// @notice Get the metadata emitter role constant
+    function roleMeadata() external pure returns (uint256) { return MEADATA; }
 
     /// @notice Get the next token ID (useful for iteration bounds)
     /// @return The next token ID that will be minted
@@ -581,6 +620,10 @@ contract FLSNaming is ERC721, OwnableRoles {
     /// @return The token URI
     function tokenURI(uint256 tokenId) public view override returns (string memory) {
         if (identities[tokenId].primaryAddress == address(0)) revert IdentityNotFound();
+        ITokenURIGenerator currentRenderer = renderer;
+        if (address(currentRenderer) != address(0)) {
+            return currentRenderer.tokenURI(tokenId);
+        }
         return string(abi.encodePacked(baseTokenURI, tokenId.toString()));
     }
 

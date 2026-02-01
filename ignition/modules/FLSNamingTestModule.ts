@@ -13,8 +13,15 @@ const FLSNamingTestModule = buildModule("FLSNamingTestModule", (m) => {
   //   "https://example.com/",
   // ]);
   const flsNamingTest = m.contract("FLSNaming", [gateNft]);
+  const renderer = m.contract("TestRenderer");
 
-  return { flsNamingTest };
+  m.call(renderer, "setBaseUri", [
+    "https://fameladysociety.com/profile/metadata/",
+  ]);
+  m.call(renderer, "setEmittableMetadata", [flsNamingTest]);
+  m.call(flsNamingTest, "setRenderer", [renderer]);
+
+  return { flsNamingTest, renderer };
 });
 
 export default FLSNamingTestModule;

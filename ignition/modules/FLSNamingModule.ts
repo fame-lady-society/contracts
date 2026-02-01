@@ -8,8 +8,15 @@ const FLSNamingModule = buildModule("FLSNamingModule", (m) => {
   );
 
   const flsNaming = m.contract("FLSNaming", [gateNft]);
+  const renderer = m.contract("TestRenderer");
 
-  return { flsNaming };
+  m.call(renderer, "setBaseUri", [
+    "https://fameladysociety.com/profile/metadata/",
+  ]);
+  m.call(renderer, "setEmittableMetadata", [flsNaming]);
+  m.call(flsNaming, "setRenderer", [renderer]);
+
+  return { flsNaming, renderer };
 });
 
 export default FLSNamingModule;

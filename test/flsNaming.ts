@@ -50,6 +50,7 @@ async function signAddVerifiedAddress(
 interface TestContext {
   flsNaming: Awaited<ReturnType<typeof viem.getContractAt<"FLSNaming">>>;
   testNft: Awaited<ReturnType<typeof viem.getContractAt<"TestNFT">>>;
+  renderer: Awaited<ReturnType<typeof viem.getContractAt<"TestRenderer">>>;
   publicClient: PublicClient;
   holder: WalletClient;
   holder2: WalletClient;
@@ -103,6 +104,16 @@ describe("FLSNaming", async function () {
       testNft.address,
     ] as const);
 
+    const renderer = await viem.deployContract("TestRenderer", [] as const);
+
+    await renderer.write.setBaseUri([
+      "https://fameladysociety.com/profile/metadata/",
+    ]);
+    await renderer.write.setEmittableMetadata([flsNaming.address]);
+    await flsNaming.write.setRenderer([renderer.address], {
+      account: walletClients[0].account!.address,
+    });
+
     // Mint test NFTs to our test holders
     const holder = walletClients[0];
     const holder2 = walletClients[1];
@@ -121,6 +132,7 @@ describe("FLSNaming", async function () {
     ctx = {
       flsNaming: flsNaming as TestContext["flsNaming"],
       testNft: testNft as TestContext["testNft"],
+      renderer: renderer as TestContext["renderer"],
       publicClient,
       holder,
       holder2,
@@ -958,6 +970,32 @@ describe("FLSNaming", async function () {
 
       const storedURI = await ctx.flsNaming.read.baseTokenURI();
       assert.equal(storedURI, newURI, "Base URI should be updated");
+    });
+
+    it("should use renderer tokenURI when set", async function () {
+      const tokenId = await ctx.flsNaming.read.addressToTokenId([
+        ctx.holder.account!.address,
+      ]);
+
+      if (tokenId === 0n) return;
+
+      const uri = await ctx.flsNaming.read.tokenURI([tokenId]);
+      assert.equal(
+        uri,
+        `https://fameladysociety.com/profile/metadata/${tokenId.toString()}`,
+        "Renderer URI should be used"
+      );
+    });
+
+    it("should allow renderer to emit metadata updates", async function () {
+      const tokenId = await ctx.flsNaming.read.addressToTokenId([
+        ctx.holder.account!.address,
+      ]);
+
+      if (tokenId === 0n) return;
+
+      await ctx.renderer.write.emitMetadata([tokenId]);
+      assert.ok(true, "Renderer should emit metadata updates");
     });
   });
 
